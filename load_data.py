@@ -1,4 +1,4 @@
-import pandas as pd # type: ignore
+import pandas as pd 
 
 # Load CSV
 df = pd.read_csv('creditcard.csv')
