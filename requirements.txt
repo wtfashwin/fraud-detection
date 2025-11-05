@@ -18,26 +18,17 @@ opentelemetry-instrumentation-fastapi==0.59b0
 opentelemetry-instrumentation-sqlalchemy==0.59b0
 opentelemetry-instrumentation-redis==0.59b0
 opentelemetry-instrumentation-celery==0.59b0
-
 fastapi
 uvicorn[standard]
 gunicorn
-
-# Asynchronous Tasks and Queue
 celery[redis]
 redis
-
-# Database (for SHAP storage)
 psycopg2-binary
 sqlalchemy
-
-# MLOps and Model
 scikit-learn
 pandas
 numpy
 shap
-
 prometheus-fastapi-instrumentator
 python-json-logger
-
 uuid
