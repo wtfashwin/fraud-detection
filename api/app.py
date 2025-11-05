@@ -6,8 +6,13 @@ import pandas as pd
 import json
 import os
 import logging
+import mlflow
+import mlflow.sklearn
+from mlflow.tracking import MlflowClient
+from functools import lru_cache
 from sqlalchemy import create_engine, text
 from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import Counter, Histogram
 from opentelemetry import trace
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -15,15 +20,45 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-from .worker import compute_shap, engine
+from xai_tasks import compute_shap
+from db.db import engine
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Fraud Detection API", version="1.0.0")
 
-MODEL = joblib.load('models/logistic_model.joblib') 
-SCALER = joblib.load('models/scaler.joblib')
+# MLflow configuration
+MLFLOW_TRACKING_URI = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000')
+MODEL_NAME = os.getenv('MLFLOW_MODEL_NAME', 'fraud-detection-model')
+MODEL_STAGE = os.getenv('MLFLOW_MODEL_STAGE', 'Production')
+
+# Initialize MLflow client
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+client = MlflowClient()
+
+@lru_cache(maxsize=1)
+def load_production_model():
+    """Load the latest production model from MLflow."""
+    try:
+        # Find the latest version in the specified stage
+        latest_version = client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE])
+        if not latest_version:
+            raise ValueError(f"No {MODEL_STAGE} version found for model {MODEL_NAME}")
+            
+        model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
+        model = mlflow.sklearn.load_model(model_uri)
+        logger.info(f"Loaded {MODEL_NAME} version {latest_version[0].version} from {MODEL_STAGE}")
+        return model
+    except Exception as e:
+        logger.error(f"Failed to load model from MLflow: {e}")
+        # Fallback to local file if MLflow fails (for development)
+        logger.warning("Falling back to local model file")
+        return joblib.load('models/logistic_model.joblib')
+
+# Load model and preprocessing artifacts
+MODEL = load_production_model()
+SCALER = joblib.load('models/scaler.joblib')  # Keep scaler local for now
 COLUMN_NAMES = joblib.load('models/columns.joblib')
 # --- 2. DATABASE & SCHEMA SETUP (Executed on Startup) ---
 
@@ -43,14 +78,30 @@ def create_db_table():
         connection.commit()
     logger.info("Database table 'shap_explanations' ensured.")
 
+
+# Custom Prometheus metrics (API-side)
+predictions_submitted = Counter("predictions_submitted_total", "Total number of prediction requests submitted")
+inference_time = Histogram("api_inference_duration_seconds", "Synchronous model inference time (seconds)")
+db_latency = Histogram("api_db_latency_seconds", "DB call latency for startup checks (seconds)")
+
 @app.on_event("startup")
 async def startup_event():
-    # Run the table creation on startup (best-effort)
+    # Run the table creation on startup (best-effort) and measure DB latency
     try:
-        create_db_table()
+        with db_latency.time():
+            create_db_table()
     except Exception as e:
         logger.error(f"Failed to connect or create table: {e}")
         # In production, this would be a fatal error, but we log and proceed for local demo
+        
+    # Ensure model is loaded from MLflow (or fallback)
+    try:
+        global MODEL
+        MODEL = load_production_model()
+        logger.info(f"Model loaded successfully from {'MLflow' if isinstance(MODEL, mlflow.sklearn.SKLearnModel) else 'local fallback'}")
+    except Exception as e:
+        logger.error(f"Critical error loading model: {e}")
+        raise
 
     # OpenTelemetry tracing setup (P2.2)
     try:
@@ -105,23 +156,42 @@ def get_status():
 
 @app.get("/health", tags=["Health"])
 def get_health(request: Request):
-    """Readiness check: Checks database and queue connectivity."""
+    """Readiness check: Checks database, queue, and MLflow connectivity."""
     health_status = {"status": "OK", "dependencies": {}}
+    degraded = False
     
     # Check Postgres connection
     try:
         with engine.connect():
             health_status["dependencies"]["postgres"] = "UP"
-    except Exception:
-        health_status["dependencies"]["postgres"] = "DOWN"
+    except Exception as e:
+        health_status["dependencies"]["postgres"] = f"DOWN ({str(e)})"
+        degraded = True
+
+    # Check Redis/Celery Broker connection
+    # For demo we assume if Postgres is up, Redis is probably up
+    health_status["dependencies"]["redis_broker"] = "UP"
+
+    # Check MLflow connection and model
+    try:
+        client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE])
+        health_status["dependencies"]["mlflow"] = "UP"
+        
+        # Verify model is loaded
+        if not isinstance(MODEL, mlflow.sklearn.SKLearnModel):
+            raise ValueError("Model not loaded from MLflow")
+        health_status["dependencies"]["model"] = "UP"
+    except Exception as e:
+        health_status["dependencies"]["mlflow"] = f"DOWN ({str(e)})"
+        # If using fallback model, mark as degraded but not down
+        if isinstance(MODEL, mlflow.sklearn.SKLearnModel):
+            health_status["dependencies"]["model"] = "DEGRADED (using fallback)"
+        else:
+            health_status["dependencies"]["model"] = "DOWN"
+            degraded = True
+
+    if degraded:
         health_status["status"] = "DEGRADED"
-
-    # Check Redis/Celery Broker connection (Celery connection is usually implicit)
-    # A simple way: Try sending a dummy task or checking Celery's connection status
-    # For simplicity here, we assume if Postgres is up, the stack is mostly ready.
-    health_status["dependencies"]["redis_broker"] = "UP" # Simplification for demo
-
-    if health_status["status"] == "DEGRADED":
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=health_status)
     return health_status
 
@@ -129,11 +199,16 @@ def get_health(request: Request):
 async def predict(transaction: TransactionIn, request: Request):
     """Synchronous scoring and asynchronous SHAP calculation."""
     corr_id = request.state.correlation_id
+    predictions_submitted.inc()
     
     # 5a. Synchronous Prediction (FAST)
     X = pd.DataFrame([transaction.features])
-    prediction = int(MODEL.predict(X)[0])
-    score = float(MODEL.predict_proba(X)[:, 1][0])
+    with inference_time.time():
+        prediction = int(MODEL.predict(X)[0])
+        try:
+            score = float(MODEL.predict_proba(X)[:, 1][0])
+        except Exception:
+            score = float(MODEL.predict(X)[0])
 
     # 5b. Asynchronous SHAP Task (P2.2 Decoupling)
     # THIS LINE WAS THE SOURCE OF THE SYNTAX ERROR! It must be INSIDE a block.

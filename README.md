@@ -1,107 +1,126 @@
-#  Project: AI-Powered Fraud Detection & Prevention System
- 
+# AI-Powered Fraud Detection System
 
-This project implements a machine learning pipeline to detect fraudulent credit card transactions. It uses logistic regression on a highly imbalanced dataset, applying SMOTE to balance classes.
-
-## Features
-- Exploratory Data Analysis (EDA)
-- Data preprocessing with feature scaling and oversampling (SMOTE)
-- Logistic Regression model training and evaluation
-- Single transaction fraud prediction script
-- Visualization of class distribution and evaluation metrics
-
-## Project Structure
-- `data/` - Raw and processed datasets  
-- `models/` - Trained model and scaler saved here  
-- `plots/` - Visualizations like ROC curve and distribution plots  
-- `preprocess.py` - Data preprocessing script  
-- `train_model.py` - Model training script  
-- `evaluate_model.py` - Model evaluation and plotting  
-- `predict_single.py` - Single transaction prediction tool
-
-## Requirements
-- Python 3.8+  
-- Packages listed in `requirements.txt`
-
-## Installation
-```bash
-python -m venv .venv
-source .venv/bin/activate   # Linux/Mac
-.venv\Scripts\activate      # Windows
-pip install -r requirements.txt
-
-
-Usage
-Run preprocessing:
-python preprocess.py
-
-Train model:
-python train_model.py
-
-Evaluate model:
-python evaluate_model.py
-
-Predict single transaction:
-python predict_single.py
-
-Ashwin Upadhyay
-
-
-#  Project: AI-Powered Fraud Detection & Prevention System
- 
-
-This project implements a machine learning pipeline to detect fraudulent credit card transactions. It uses logistic regression on a highly imbalanced dataset, applying SMOTE to balance classes.
+This project implements a production-grade fraud detection system with asynchronous explainability, MLOps instrumentation, and observability.
 
 ## Features
-- Exploratory Data Analysis (EDA)
-- Data preprocessing with feature scaling and oversampling (SMOTE)
-- Logistic Regression model training and evaluation
-- Single transaction fraud prediction script
-- Visualization of class distribution and evaluation metrics
+- FastAPI-based prediction API with correlation IDs
+- Async XAI calculations via Celery workers
+- MLflow experiment tracking and model registry
+- Prometheus metrics and Grafana dashboards
+- OpenTelemetry distributed tracing
+- Docker Compose stack for local development
+- Kubernetes deployment manifests and KEDA autoscaling
+- Synthetic data generation for testing
 
 ## Project Structure
-- `data/` - Raw and processed datasets  
-- `models/` - Trained model and scaler saved here  
-- `plots/` - Visualizations like ROC curve and distribution plots  
-- `preprocess.py` - Data preprocessing script  
-- `train_model.py` - Model training script  
-- `evaluate_model.py` - Model evaluation and plotting  
-- `predict_single.py` - Single transaction prediction tool
+```
+├── api/              # FastAPI application
+├── models/           # Trained models and scalers
+├── scripts/          # Utility scripts
+├── monitoring/       # Prometheus, Grafana, OTEL configs
+├── alembic/          # Database migrations
+├── k8s/              # Kubernetes manifests
+└── docker-compose.yml
+```
 
-## Requirements
-- Python 3.8+  
-- Packages listed in `requirements.txt`
+## Quick Start
 
-## Installation
+### Local Development
+1. Start the full stack:
 ```bash
-python -m venv .venv
-source .venv/bin/activate   # Linux/Mac
-.venv\Scripts\activate      # Windows
-pip install -r requirements.txt
+docker compose up -d
+```
 
+2. Generate synthetic test data:
+```bash
+python scripts/generate_synthetic_data.py
+```
 
-Usage
-Run preprocessing:
-python preprocess.py
+3. Train and register model:
+```bash
+# Set environment variables for MLflow (optional)
+export MLFLOW_TRACKING_URI=http://localhost:5000
+export MLFLOW_EXPERIMENT=fraud-detection
+export MLFLOW_MODEL_NAME=fraud-detection-model
+export MLFLOW_AUC_THRESHOLD=0.95
 
-Train model:
+# Train using real or synthetic data
 python train_model.py
+```
 
-Evaluate model:
-python evaluate_model.py
+4. Access services:
+- API docs: http://localhost:8000/docs
+- MLflow UI: http://localhost:5000
+- Grafana: http://localhost:3000
+- Jaeger UI: http://localhost:16686
 
-Predict single transaction:
-python predict_single.py
+### Model Training & MLflow
+- The `train_model.py` script:
+  - Preprocesses data with SMOTE
+  - Trains a LogisticRegression model
+  - Computes test AUC score
+  - Logs metrics and artifacts to MLflow
+  - Registers model if AUC threshold is met
 
-Ashwin Upadhyay
+Environment variables:
+- `DATA_CSV`: Path to training data CSV
+- `MLFLOW_TRACKING_URI`: MLflow server URL
+- `MLFLOW_EXPERIMENT`: Experiment name
+- `MLFLOW_MODEL_NAME`: Name for model registry
+- `MLFLOW_AUC_THRESHOLD`: Min AUC to register model
 
+### API & Worker
+The system consists of:
+1. FastAPI application (/predict endpoint)
+2. Celery worker for async XAI
+3. PostgreSQL for result persistence
+4. Redis for task queue
+5. Observability stack (Prometheus, Grafana, Jaeger)
 
-## 3. **requirements.txt**
+### CI/CD
+The GitHub Actions workflow:
+1. Runs tests
+2. Generates synthetic data
+3. Trains model on CI dataset
+4. Builds and scans Docker image
+5. Uploads model artifacts
 
-numpy
-pandas
-scikit-learn
-imbalanced-learn
-matplotlib
-joblib
+### Production Deployment
+Kubernetes manifests provided:
+- API and worker deployments
+- KEDA ScaledObject for autoscaling
+- HorizontalPodAutoscaler configs
+- Example Prometheus alert rules
 
+## Development
+
+### Running Tests
+```bash
+pytest
+```
+
+### Database Migrations
+```bash
+alembic upgrade head
+```
+
+### Synthetic Data Generation
+For testing without production data:
+```bash
+python scripts/generate_synthetic_data.py
+```
+
+## Monitoring
+- Prometheus metrics at /metrics
+- Grafana dashboards for model/system metrics
+- Jaeger for distributed tracing
+- Structured JSON logging with correlation IDs
+
+## Contributing
+1. Branch from main
+2. Make changes
+3. Run tests and lint
+4. Submit PR
+
+## License
+MIT

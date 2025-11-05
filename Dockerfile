@@ -20,5 +20,8 @@ RUN chown -R appuser:appuser /app
 
 USER appuser
 
-# Default command for the API (overridden by docker-compose for workers)
+COPY --chown=appuser:appuser run_migrations.sh /app/run_migrations.sh
+RUN chmod +x /app/run_migrations.sh
+
+ENTRYPOINT ["/app/run_migrations.sh"]
 CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "api.app:app", "--bind", "0.0.0.0:8000", "--workers", "2"]

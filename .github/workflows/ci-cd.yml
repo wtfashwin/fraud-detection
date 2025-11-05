@@ -9,6 +9,14 @@ on:
 jobs:
   test_and_build:
     runs-on: ubuntu-latest
+    services:
+      mlflow:
+        image: ghcr.io/mlflow/mlflow:v2.8.0
+        ports:
+          - 5000:5000
+        env:
+          MLFLOW_TRACKING_URI: http://localhost:5000
+        options: --health-cmd "curl -f http://localhost:5000/health" --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -32,6 +40,44 @@ jobs:
           pip install pytest
           pytest -q || true
 
+      - name: Generate synthetic data
+        run: |
+          python scripts/generate_synthetic_data.py
+        env:
+          CI_SYNTHETIC_SAMPLES: "1000"
+
+      - name: Train and validate model
+        run: |
+          python train_model.py
+        env:
+          DATA_CSV: data/synthetic_ci.csv
+          MLFLOW_TRACKING_URI: http://localhost:5000
+          MLFLOW_EXPERIMENT: fraud-detection-ci
+          MLFLOW_MODEL_NAME: fraud-detection-model-ci
+          MLFLOW_AUC_THRESHOLD: "0.70"  # Lower threshold for synthetic data
+
       - name: Build Docker images
         run: |
           docker build -t fraud-api:ci .
+      - name: Scan image with Trivy (optional; install trivy in runner)
+        run: |
+          sudo apt-get update && sudo apt-get install -y wget
+          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.43.0_Linux-64bit.deb
+          sudo dpkg -i trivy_0.43.0_Linux-64bit.deb || true
+          trivy image --exit-code 0 --severity HIGH,CRITICAL fraud-api:ci || true
+      - name: Run Alembic migrations (if DB available)
+        run: |
+          if [ -n "$DATABASE_URL" ]; then
+            pip install alembic
+            alembic upgrade head || true
+          else
+            echo "DATABASE_URL not set in CI runner; skipping migrations"
+          fi
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: model-artifacts
+          path: |
+            models/logistic_model.joblib
+            models/scaler.joblib

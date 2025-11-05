@@ -1,0 +1,64 @@
+api:
+  name: fraud-api
+  image:
+    repository: fraud-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+worker:
+  name: xai-worker
+  image:
+    repository: fraud-api  # Same image, different entrypoint
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+redis:
+  architecture: standalone
+  auth:
+    enabled: false  # Disable auth for local development
+
+postgresql:
+  auth:
+    username: postgres
+    password: postgres
+    database: fraud
+  primary:
+    persistence:
+      enabled: true
+      size: 1Gi
+
+mlflow:
+  backendStore:
+    databaseConnectionString: "postgresql://postgres:postgres@postgresql:5432/mlflow"
+  artifactRoot:
+    url: /mlflow/artifacts
+
+monitoring:
+  enabled: true
+  prometheus:
+    scrapeInterval: 15s
+  grafana:
+    enabled: true
+    dashboardsEnabled: true
+
+otel:
+  enabled: true
+  endpoint: "http://otel-collector:4318/v1/traces"

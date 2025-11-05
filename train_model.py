@@ -1,21 +1,30 @@
+import os
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from imblearn.over_sampling import SMOTE
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
 import joblib
+
+try:
+    import mlflow
+    import mlflow.sklearn
+    MLFLOW_AVAILABLE = True
+except Exception:
+    MLFLOW_AVAILABLE = False
+
 
 def main():
     print("📥 Loading dataset...")
-    # Change this path if your CSV is somewhere else
-    df = pd.read_csv("data/creditcard.csv")  
+    df = pd.read_csv(os.getenv('DATA_CSV', 'data/creditcard.csv'))
 
     print("🔍 Checking missing values...")
     print(df.isnull().sum())
 
     print("🔄 Scaling features...")
-    # Features to scale - exclude 'Class' and 'Time' optionally
-    features = df.drop(columns=["Class", "Time"])
+    features = df.drop(columns=["Class", "Time"], errors='ignore')
     scaler = StandardScaler()
     scaled_features = scaler.fit_transform(features)
 
@@ -36,17 +45,51 @@ def main():
 
     print(f"✅ Class balance after SMOTE → {np.bincount(y_res)}")
 
-    print("💾 Saving preprocessed arrays and scaler...")
-    np.savez_compressed(
-        "preprocessed_data.npz",
-        X_res=X_res,
-        y_res=y_res,
-        X_test=X_test,
-        y_test=y_test
-    )
-    joblib.dump(scaler, "scaler.joblib")
+    # Train a simple logistic regression model
+    print("🧠 Training LogisticRegression model...")
+    model = LogisticRegression(max_iter=1000)
+    model.fit(X_res, y_res)
 
-    print("🏁 Preprocessing complete.")
+    # Evaluate
+    preds = model.predict_proba(X_test)[:, 1]
+    auc = roc_auc_score(y_test, preds)
+    print(f"📊 Test AUC: {auc:.4f}")
+
+    # Save model and scaler
+    os.makedirs('models', exist_ok=True)
+    joblib.dump(model, 'models/logistic_model.joblib')
+    joblib.dump(scaler, 'models/scaler.joblib')
+    print("💾 Model and scaler saved to /models")
+
+    # MLflow logging (if available)
+    if MLFLOW_AVAILABLE:
+        mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://localhost:5000'))
+        experiment_name = os.getenv('MLFLOW_EXPERIMENT', 'fraud-detection')
+        model_name = os.getenv('MLFLOW_MODEL_NAME', 'fraud-detection-model')
+        mlflow.set_experiment(experiment_name)
+        
+        with mlflow.start_run():
+            mlflow.log_metric('test_auc', float(auc))
+            mlflow.sklearn.log_model(model, 'model')
+            mlflow.log_artifact('models/scaler.joblib')
+            print(f"✅ Logged run to MLflow experiment '{experiment_name}'")
+            
+            # Register model if AUC meets threshold
+            auc_threshold = float(os.getenv('MLFLOW_AUC_THRESHOLD', '0.95'))
+            if auc >= auc_threshold:
+                try:
+                    result = mlflow.register_model(
+                        f"runs:/{mlflow.active_run().info.run_id}/model",
+                        model_name
+                    )
+                    print(f"✨ Registered model version {result.version} (AUC {auc:.4f} >= {auc_threshold})")
+                except Exception as e:
+                    print(f"⚠️ Model registration failed: {e}")
+            else:
+                print(f"ℹ️ Model not registered (AUC {auc:.4f} < {auc_threshold})")
+    else:
+        print("MLflow not available; skipping tracking")
+
 
 if __name__ == "__main__":
     main()

@@ -9,7 +9,6 @@ exporters:
     loglevel: info
   jaeger:
     endpoint: "http://jaeger:14268/api/traces"
-    # For agent-based, use host:port and protocol http
     insecure: true
 
 service:

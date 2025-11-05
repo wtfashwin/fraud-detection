@@ -1,0 +1,20 @@
+apiVersion: v2
+name: fraud-detection
+description: A Helm chart for the Fraud Detection System with MLOps capabilities
+
+# Chart version, increment this when you change the chart
+version: 0.1.0
+
+# Application version (your fraud detection system version)
+appVersion: "1.0.0"
+
+dependencies:
+  - name: redis
+    version: "~17.0.0"
+    repository: "https://charts.bitnami.com/bitnami"
+  - name: postgresql
+    version: "~12.0.0"
+    repository: "https://charts.bitnami.com/bitnami"
+  - name: mlflow
+    version: "~0.7.0"
+    repository: "https://community-charts.github.io/helm-charts"

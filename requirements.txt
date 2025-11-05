@@ -19,6 +19,8 @@ opentelemetry-instrumentation-sqlalchemy==0.59b0
 opentelemetry-instrumentation-redis==0.59b0
 opentelemetry-instrumentation-celery==0.59b0
 
+alembic==1.12.0
+mlflow==2.15.0
 fastapi
 uvicorn[standard]
 gunicorn
@@ -28,9 +30,7 @@ celery[redis]
 redis
 
 # Database (for SHAP storage)
-psycopg2-binary
-sqlalchemy
-
+SQLAlchemy==2.0.22
 # MLOps and Model
 scikit-learn
 pandas

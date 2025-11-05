@@ -1,11 +1,11 @@
 services:
+  # --- DATABASE SERVICES ---
   redis:
     image: redis:6-alpine
     restart: always
     networks:
       - internal
 
-  
   postgres:
     image: postgres:15-alpine
     restart: always
@@ -19,19 +19,32 @@ services:
       - internal
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 10s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      - mlflow-db  
+      
+  # --- MLFLOW TRACKING DB ---
+  mlflow-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow_secret
+      POSTGRES_DB: mlflow_tracking
+    volumes:
+      - mlflow_db_data:/var/lib/postgresql/data
+    networks:
+      - internal
 
+  # --- APPLICATION SERVICES ---
   api:
     build: .
-    command: uvicorn api.app:app --host 0.0.0.0 --port 8000 --workers 4
+    command: gunicorn -k uvicorn.workers.UvicornWorker api.app:app --host 0.0.0.0 --port 8000 --workers 2
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-fraud}
-      - MODEL_PATH=/app/models/logistic_model.joblib
-      - FEATURE_NAMES_PATH=/app/models/feature_names.json
+      CELERY_BROKER_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-fraud}
     depends_on:
       redis:
         condition: service_started
@@ -40,7 +53,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - .:/app:ro
+      - .:/app:ro 
     networks:
       - internal
     healthcheck:
@@ -48,15 +61,13 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
+  
   xai-worker:
     build: .
     command: celery -A xai_tasks.celery_app worker --loglevel=info --concurrency=1
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-fraud}
-      - MODEL_PATH=/app/models/logistic_model.joblib
-      - FEATURE_NAMES_PATH=/app/models/feature_names.json
+      CELERY_BROKER_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-fraud}
     depends_on:
       redis:
         condition: service_started
@@ -67,50 +78,80 @@ services:
     networks:
       - internal
 
+  # --- MLOPS TOOLS ---
+  mlflow:
+    # CRITICAL FIX: Using a working community image source
+    image: ghcr.io/mlflow/mlflow
+    restart: always
+    # FIX: Corrected command indentation
+    command: mlflow server --backend-store-uri postgresql://mlflow:mlflow_secret@mlflow-db:5432/mlflow_tracking --default-artifact-root /mlflow/mlruns -h 0.0.0.0
+    environment:
+      # MLflow server uses the mlflow-db service to store tracking data
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    ports:
+      - "5000:5000"
+    volumes:
+      # Persistent storage for model artifacts
+      - ./mlruns:/mlflow/mlruns
+    depends_on:
+      - mlflow-db
+    networks:
+      - internal
+
+  # --- OBSERVABILITY STACK ---
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      # Ensure you have a monitoring/prometheus.yml file
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    ports:
+      - "9090:9090"
+    networks:
+      - internal
+    
+  grafana:
+    image: grafana/grafana:9.5.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      # Ensure you have the dashboard JSON file in the correct monitoring path
+      - ./monitoring/grafana_dashboard.json:/var/lib/grafana/dashboards/fraud_dashboard.json:ro
+      - ./monitoring/grafana_provisioning/:/etc/grafana/provisioning/datasources/
+    ports:
+      - "3000:3000"
+    networks:
+      - internal
+    depends_on:
+      - prometheus
+      
+  jaeger:
+    image: jaegertracing/all-in-one:1.46
+    environment:
+      COLLECTOR_ZIPKIN_HTTP_PORT: 9411
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "14268:14268"   # Jaeger collector HTTP
+    networks:
+      - internal
+      
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.81.0
     command: ["--config", "/etc/otel-collector-config.yaml"]
     volumes:
       - ./monitoring/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
-    networks:
-      - internal
-
-  jaeger:
-    image: jaegertracing/all-in-one:1.46
-    environment:
-      - COLLECTOR_ZIPKIN_HTTP_PORT=9411
     ports:
-      - "16686:16686"  # Jaeger UI
-      - "14268:14268"  # Jaeger collector HTTP
-    networks:
-      - internal
-
-  prometheus:
-    image: prom/prometheus:latest
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    command: ["--config.file=/etc/prometheus/prometheus.yml"]
-    networks:
-      - internal
-
-  grafana:
-    image: grafana/grafana:9.5.0
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    volumes:
-      - ./monitoring/grafana_dashboard.json:/var/lib/grafana/dashboards/fraud_dashboard.json:ro
-    ports:
-      - "3000:3000"
+      - "4317:4317" # OTLP gRPC endpoint
+    depends_on:
+      - jaeger
+      - prometheus
     networks:
       - internal
 
 volumes:
   postgres_data:
+  mlflow_db_data:
 
 networks:
   internal:
     driver: bridge
-
-# Notes:
-# - Uses a single Dockerfile to build both api and xai-worker images.
-# - Secrets and non-default values should be provided through a real .env (not committed). See .env.example.

@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xai-worker
+  labels:
+    app: fraud-detection
+    component: xai-worker
+spec:
+  replicas: 1  # Initial replica count, KEDA will manage scaling
+  selector:
+    matchLabels:
+      app: fraud-detection
+      component: xai-worker
+  template:
+    metadata:
+      labels:
+        app: fraud-detection
+        component: xai-worker
+    spec:
+      containers:
+      - name: worker
+        image: fraud-api:latest  # Same image as API, different entrypoint
+        imagePullPolicy: IfNotPresent
+        command: ["celery", "-A", "xai_tasks", "worker", "--loglevel=info"]
+        env:
+        - name: REDIS_URL
+          value: "redis://redis:6379/0"
+        - name: DATABASE_URL
+          value: "postgresql://postgres:postgres@postgres:5432/fraud"
+        - name: OTEL_SERVICE_NAME
+          value: "fraud-xai-worker"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector:4318/v1/traces"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "celery -A xai_tasks control shutdown"]  # Graceful shutdown
+        readinessProbe:
+          exec:
+            command:
+            - celery
+            - -A
+            - xai_tasks
+            - inspect
+            - ping
+            - -d
+            - celery@$HOSTNAME
+          initialDelaySeconds: 15
+          periodSeconds: 10

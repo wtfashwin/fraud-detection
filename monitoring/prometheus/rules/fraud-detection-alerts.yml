@@ -1,0 +1,40 @@
+groups:
+- name: fraud-detection
+  rules:
+  - alert: HighAPILatency
+    expr: |
+      histogram_quantile(0.95, 
+        sum(rate(http_request_duration_seconds_bucket{handler!="/metrics"}[5m])) by (le)
+      ) > 0.5
+    for: 5m
+    labels:
+      severity: warning
+      team: mlops
+    annotations:
+      summary: High API latency detected
+      description: 95th percentile latency is above 500ms for 5 minutes
+      runbook_url: https://github.com/wtfashwin/fraud-detection/blob/main/docs/runbooks/HighLatency.md
+      
+  - alert: WorkerQueueBacklog
+    expr: |
+      redis_list_length{key="celery"} > 100
+    for: 10m
+    labels:
+      severity: warning
+      team: mlops
+    annotations:
+      summary: Large worker queue backlog
+      description: Celery task queue has over 100 items for 10 minutes
+      runbook_url: https://github.com/wtfashwin/fraud-detection/blob/main/docs/runbooks/QueueBacklog.md
+      
+  - alert: MLflowUnavailable
+    expr: |
+      up{job="mlflow"} == 0
+    for: 5m
+    labels:
+      severity: critical
+      team: mlops
+    annotations:
+      summary: MLflow server is down
+      description: MLflow tracking server has been unavailable for 5 minutes
+      runbook_url: https://github.com/wtfashwin/fraud-detection/blob/main/docs/runbooks/MLflowDown.md

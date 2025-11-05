@@ -1,0 +1,18 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ .Values.worker.name }}-scaler
+spec:
+  scaleTargetRef:
+    name: {{ .Values.worker.name }}
+  minReplicaCount: 0
+  maxReplicaCount: 10
+  pollingInterval: 15
+  cooldownPeriod: 30
+  triggers:
+  - type: redis
+    metadata:
+      address: redis://{{ .Release.Name }}-redis-master:6379
+      listName: celery
+      listLength: "5"
+      enableTLS: "false"
