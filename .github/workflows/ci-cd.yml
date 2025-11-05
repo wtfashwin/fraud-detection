@@ -1,4 +1,4 @@
-name: Robust CI/CD - Validate & Deploy 🚀
+name: CI/CD 
 
 on:
   push:

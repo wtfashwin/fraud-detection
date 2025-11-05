@@ -28,6 +28,7 @@ sqlalchemy
 scikit-learn
 pandas
 numpy
+httpx
 shap
 prometheus-fastapi-instrumentator
 python-json-logger
