@@ -1,0 +1,25 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "graph",
+      "title": "API Request Rate",
+      "targets": [
+        { "expr": "http_requests_total", "legendFormat": "requests" }
+      ],
+      "id": 1
+    },
+    {
+      "type": "graph",
+      "title": "XAI Task Duration (s)",
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(xai_task_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" }
+      ],
+      "id": 2
+    }
+  ],
+  "schemaVersion": 16,
+  "title": "Fraud Detection Observability"
+}

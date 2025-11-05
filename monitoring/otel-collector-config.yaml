@@ -1,0 +1,22 @@
+receivers:
+  otlp:
+    protocols:
+      grpc: {}
+      http: {}
+
+exporters:
+  logging:
+    loglevel: info
+  jaeger:
+    endpoint: "http://jaeger:14268/api/traces"
+    # For agent-based, use host:port and protocol http
+    insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [logging]
+    metrics:
+      receivers: [otlp]
+      exporters: [logging]

@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-xai-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fraud-xai-worker
+  template:
+    metadata:
+      labels:
+        app: fraud-xai-worker
+    spec:
+      containers:
+        - name: xai-worker
+          image: your-registry/fraud-worker:latest
+          command: ["celery", "-A", "xai_tasks.celery_app", "worker", "--loglevel=info"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DATABASE_URL
+            - name: CELERY_BROKER_URL
+              value: redis://redis:6379/0
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
