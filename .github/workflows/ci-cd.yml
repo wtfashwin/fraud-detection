@@ -1,3 +1,170 @@
+name: Robust CI/CD - Validate & Deploy
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  packages: write
+  issues: write
+  pull-requests: write
+
+env:
+  IMAGE_NAME: fraud-api
+  REGISTRY: ghcr.io
+  REGISTRY_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  validate_model:
+    name: Validate Model (CI + Model QA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies (Debian)  # prevents psycopg2/build failures
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc gfortran libpq-dev libopenblas-dev liblapack-dev libomp-dev curl
+        timeout-minutes: 5
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+        timeout-minutes: 10
+
+      - name: Generate synthetic data for CI
+        run: |
+          python scripts/generate_synthetic_data.py
+        env:
+          CI_SYNTHETIC_SAMPLES: "1000"
+        timeout-minutes: 5
+
+      - name: Run tests
+        run: |
+          python -m pip install pytest
+          pytest -q
+        timeout-minutes: 10
+
+      - name: Train model and output AUC
+        run: |
+          python train_model.py
+        env:
+          DATA_CSV: data/synthetic_ci.csv
+          MLFLOW_TRACKING_URI: http://localhost:5000
+          MLFLOW_EXPERIMENT: fraud-detection-ci
+          MLFLOW_MODEL_NAME: fraud-detection-model-ci
+          MLFLOW_AUC_THRESHOLD: "0.70"
+        timeout-minutes: 15
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifacts
+          path: |
+            models/logistic_model.joblib
+            models/scaler.joblib
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REGISTRY_OWNER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        timeout-minutes: 15
+
+  deploy_to_minikube:
+    name: Deploy to Minikube (CD)
+    runs-on: ubuntu-latest
+    needs: validate_model
+    if: needs.validate_model.result == 'success'
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download model artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: model-artifacts
+        timeout-minutes: 5
+
+      - name: Start Minikube
+        uses: helm/minikube-action@v2
+        with:
+          minikube-version: '1.30.0'
+          kubernetes-version: '1.27.0'
+        timeout-minutes: 5
+
+      - name: Wait for Minikube to be Ready
+        run: |
+          kubectl wait --for=condition=Ready node --all --timeout=120s
+        timeout-minutes: 5
+
+      - name: Configure Helm and Kube context
+        run: |
+          helm version
+          kubectl version --client
+        timeout-minutes: 3
+
+      - name: Install/Ensure KEDA is available
+        run: |
+          helm repo add kedacore https://kedacore.github.io/charts
+          helm repo update
+          helm upgrade --install keda kedacore/keda --namespace keda --create-namespace
+        timeout-minutes: 5
+
+      - name: Authenticate Docker to Minikube registry (if using local registry)
+        run: |
+          echo "Using GHCR image: ${{ env.REGISTRY }}/${{ env.REGISTRY_OWNER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        timeout-minutes: 1
+
+      - name: Deploy Helm chart (upgrade/install)
+        run: |
+          helm upgrade --install fraud-detection ./charts/fraud-detection \
+            --set api.image.repository=${{ env.REGISTRY }}/${{ env.REGISTRY_OWNER }}/${{ env.IMAGE_NAME }} \
+            --set api.image.tag=${{ github.sha }} \
+            --timeout 5m
+        timeout-minutes: 8
+
+      - name: Wait for API deployment rollout
+        run: |
+          kubectl rollout status deployment/fraud-api --namespace default --timeout=180s
+        timeout-minutes: 6
+
+      - name: Verify API health endpoint
+        run: |
+          kubectl port-forward deploy/fraud-api 8000:8000 &
+          sleep 3
+          curl -f http://localhost:8000/health
+        timeout-minutes: 2
 name: CI/CD
 
 on:
@@ -25,9 +192,15 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install system dependencies (Debian)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc gfortran libpq-dev libopenblas-dev liblapack-dev libomp-dev
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
 
       - name: Run lint

@@ -9,7 +9,6 @@ exporters:
     loglevel: info
   jaeger:
     endpoint: "http://jaeger:14268/api/traces"
-    insecure: true
 
 service:
   pipelines:
