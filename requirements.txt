@@ -30,7 +30,7 @@ scikit-learn
 pandas
 numpy==1.26.4
 shap
-
+httpx
 prometheus-fastapi-instrumentator
 python-json-logger
 
