@@ -32,7 +32,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      # ... (remaining steps for dependencies, caching, tests, model training, build, and push)
       - name: Install system dependencies (Debian)  # prevents psycopg2/build failures
         if: runner.os == 'Linux'
         run: |
@@ -60,6 +59,9 @@ jobs:
         env:
           CI_SYNTHETIC_SAMPLES: "1000"
         timeout-minutes: 5
+
+      - name: Set PYTHONPATH
+        run: echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
 
       - name: Run tests
         run: |
