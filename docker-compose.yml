@@ -1,3 +1,4 @@
+version: '3.8'
 services:
   # --- DATABASE SERVICES ---
   redis:
@@ -24,7 +25,8 @@ services:
       retries: 6
       start_period: 20s
     depends_on:
-      - mlflow-db  
+      # Note: postgres depends on mlflow-db starting first
+      - mlflow-db 
       
   # --- MLFLOW TRACKING DB ---
   mlflow-db:
@@ -40,6 +42,7 @@ services:
 
   # --- APPLICATION SERVICES ---
   api:
+    # Uses your local Dockerfile (build: .) which installs psycopg2-binary
     build: .
     command: gunicorn -k uvicorn.workers.UvicornWorker api.app:app --host 0.0.0.0 --port 8000 --workers 2
     environment:
@@ -63,6 +66,7 @@ services:
       retries: 3
   
   xai-worker:
+    # Uses your local Dockerfile (build: .) which installs psycopg2-binary
     build: .
     command: celery -A xai_tasks.celery_app worker --loglevel=info --concurrency=1
     environment:
@@ -80,26 +84,24 @@ services:
 
   # --- MLOPS TOOLS ---
   mlflow:
-    # CRITICAL FIX: Using a working community image source
-    image: ghcr.io/mlflow/mlflow
+    # Uses your local Dockerfile (build: .) to ensure psycopg2-binary is installed
+    build: . 
     restart: always
-    # FIX: Corrected command indentation
     command: mlflow server --backend-store-uri postgresql://mlflow:mlflow_secret@mlflow-db:5432/mlflow_tracking --default-artifact-root /mlflow/mlruns -h 0.0.0.0
     environment:
-      # MLflow server uses the mlflow-db service to store tracking data
       MLFLOW_TRACKING_URI: http://mlflow:5000
     ports:
       - "5000:5000"
     volumes:
-      # Persistent storage for model artifacts
       - ./mlruns:/mlflow/mlruns
+      - .:/app
     depends_on:
       - mlflow-db
     networks:
       - internal
 
   # --- OBSERVABILITY STACK ---
-  prometheus:
+  prometheus: # FIX: Service is now correctly defined and indented
     image: prom/prometheus:latest
     volumes:
       # Ensure you have a monitoring/prometheus.yml file
@@ -141,7 +143,7 @@ services:
     volumes:
       - ./monitoring/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
     ports:
-      - "4317:4317" # OTLP gRPC endpoint
+      - "4317:4317" 
     depends_on:
       - jaeger
       - prometheus
