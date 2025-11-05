@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   # --- DATABASE SERVICES ---
   redis:
@@ -42,9 +41,8 @@ services:
 
   # --- APPLICATION SERVICES ---
   api:
-    # Uses your local Dockerfile (build: .) which installs psycopg2-binary
     build: .
-    command: gunicorn -k uvicorn.workers.UvicornWorker api.app:app --host 0.0.0.0 --port 8000 --workers 2
+    entrypoint: ["sh", "-c", "/app/run_migrations.sh && exec gunicorn -k uvicorn.workers.UvicornWorker api.app:app --bind 0.0.0.0:8000 --workers 2"]
     environment:
       CELERY_BROKER_URL: redis://redis:6379/0
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-fraud}
@@ -66,9 +64,8 @@ services:
       retries: 3
   
   xai-worker:
-    # Uses your local Dockerfile (build: .) which installs psycopg2-binary
     build: .
-    command: celery -A xai_tasks.celery_app worker --loglevel=info --concurrency=1
+    entrypoint: ["sh", "-c", "celery -A xai_tasks.celery_app worker --loglevel=info --concurrency=1"]
     environment:
       CELERY_BROKER_URL: redis://redis:6379/0
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-fraud}
@@ -84,10 +81,9 @@ services:
 
   # --- MLOPS TOOLS ---
   mlflow:
-    # Uses your local Dockerfile (build: .) to ensure psycopg2-binary is installed
     build: . 
     restart: always
-    command: mlflow server --backend-store-uri postgresql://mlflow:mlflow_secret@mlflow-db:5432/mlflow_tracking --default-artifact-root /mlflow/mlruns -h 0.0.0.0
+    entrypoint: ["sh", "-c", "mlflow server --backend-store-uri postgresql://mlflow:mlflow_secret@mlflow-db:5432/mlflow_tracking --default-artifact-root /mlflow/mlruns -h 0.0.0.0"]
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
     ports:
@@ -101,10 +97,9 @@ services:
       - internal
 
   # --- OBSERVABILITY STACK ---
-  prometheus: # FIX: Service is now correctly defined and indented
+  prometheus: 
     image: prom/prometheus:latest
     volumes:
-      # Ensure you have a monitoring/prometheus.yml file
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command: ["--config.file=/etc/prometheus/prometheus.yml"]
     ports:
