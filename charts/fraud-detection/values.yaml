@@ -19,7 +19,7 @@ api:
 worker:
   name: xai-worker
   image:
-    repository: fraud-api  # Same image, different entrypoint
+    repository: fraud-api  
     tag: latest
     pullPolicy: IfNotPresent
   resources:
