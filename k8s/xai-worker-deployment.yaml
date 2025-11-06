@@ -25,16 +25,6 @@ spec:
             # Updated to use Redis with Sentinel for HA
             - name: CELERY_BROKER_URL
               value: sentinel://redis-master:26379/0
-            # Add SHAP background size configuration
-            - name: SHAP_BG_SIZE
-              value: "100"
-          resources:
-            requests:
-              cpu: "200m"
-              memory: "512Mi"
-            limits:
-              cpu: "2"
-              memory: "4Gi"
           readinessProbe:
             exec:
               command:

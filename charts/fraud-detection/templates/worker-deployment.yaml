@@ -31,14 +31,16 @@ spec:
         # Updated to use Redis with Sentinel for HA
         - name: CELERY_BROKER_URL
           value: "sentinel://{{ .Release.Name }}-redis-master:26379/0"
-        - name: SHAP_BG_SIZE
-          value: "100"
         - name: OTEL_SERVICE_NAME
           value: "xai-worker"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: {{ .Values.otel.endpoint | quote }}
         resources:
           {{- toYaml .Values.worker.resources | nindent 12 }}
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "celery -A xai_tasks control shutdown"]
         readinessProbe:
           exec:
             command:

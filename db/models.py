@@ -39,9 +39,8 @@ class SHAPExplanation(Base):
     feature_names = Column(JSONB)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Add schema enforcement for JSONB column
     __table_args__ = (
         UniqueConstraint('transaction_id', name='uq_shap_transaction_id'),
-        # Add CHECK constraint to ensure shap_values is an array
-        text("ALTER TABLE shap_explanations ADD CONSTRAINT check_shap_schema CHECK (jsonb_typeof(shap_values) = 'array')"),
+        
+        CheckConstraint("jsonb_typeof(shap_values) = 'array'", name='check_shap_schema')
     )

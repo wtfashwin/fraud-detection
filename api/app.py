@@ -257,7 +257,9 @@ def get_health(request: Request):
             except Exception as validation_error:
                 health_status["dependencies"]["model_validation"] = f"FAILED ({str(validation_error)})"
                 logger.error(f"Model runtime validation failed: {validation_error}")
+                # Log failure to MLflow as experiment artifact
                 try:
+                    # This would normally log to MLflow, but we'll just log for now
                     logger.warning(f"Model validation failure would be logged to MLflow: {validation_error}")
                 except Exception as mlflow_error:
                     logger.error(f"Failed to log validation failure to MLflow: {mlflow_error}")
