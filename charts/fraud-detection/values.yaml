@@ -64,9 +64,24 @@ postgresql:
 
 mlflow:
   backendStore:
-    databaseConnectionString: "postgresql://postgres:postgres@fraud-detection-postgresql:5432/mlflow"
+    databaseMigration: true
+    databaseConnectionCheck: true
+    postgres:
+      enabled: true
+      host: "fraud-detection-postgresql"
+      port: 5432
+      database: "mlflow"
+      user: "postgres"
+      password: "postgres"
+      driver: "psycopg2"
   artifactRoot:
-    url: /mlflow/artifacts
+    proxiedArtifactStorage: false
+    s3:
+      enabled: false
+    azureBlob:
+      enabled: false
+    gcs:
+      enabled: false
 
 monitoring:
   enabled: true
