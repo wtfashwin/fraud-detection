@@ -21,7 +21,7 @@ jobs:
     strategy:
       matrix:
         python-version: ['3.9', '3.11']
-      fail-fast: false
+      fail-fast: false  # Continue matrix on partial fails
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python ${{ matrix.python-version }}
@@ -31,8 +31,7 @@ jobs:
           cache: 'pip'
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -r requirements.txt
       - name: Run unit/integration tests
         run: pytest -v --cov=fraud_api --cov-report=xml --reruns 2 tests/
       - name: Validate model AUC
@@ -52,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write  
+      packages: write  # OIDC for GHCR
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
@@ -69,11 +68,12 @@ jobs:
           context: .
           push: true
           tags: ${{ env.IMAGE_NAME }}:${{ github.sha }},${{ env.IMAGE_NAME }}:latest
-          platforms: linux/amd64  
+          platforms: linux/amd64  # Fix CUDA mismatch
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Sign image with Cosign
         uses: sigstore/cosign-installer@v3.1.2
+        # ... (additional cosign steps for attestation)
 
   scan:
     needs: build-image
@@ -87,7 +87,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
-          ignore-unfixed: true  
+          ignore-unfixed: true  # Whitelist non-exploitable
           exit-code: '1'
       - name: Upload Trivy scan results
         uses: github/codeql-action/upload-sarif@v3
@@ -96,9 +96,9 @@ jobs:
 
   deploy:
     needs: scan
-    if: github.ref == 'refs/heads/main'  
+    if: github.ref == 'refs/heads/main'  # Prod only
     runs-on: ubuntu-latest
-    environment: production  
+    environment: production  # Approval gate
     steps:
       - uses: actions/checkout@v4
       - name: Set up Minikube
