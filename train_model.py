@@ -17,49 +17,55 @@ except Exception:
 
 
 def main():
-    print("📥 Loading dataset...")
+    print("Loading dataset...")
     df = pd.read_csv(os.getenv('DATA_CSV', 'data/creditcard.csv'))
 
-    print("🔍 Checking missing values...")
+    print("Checking missing values...")
     print(df.isnull().sum())
 
-    print("🔄 Scaling features...")
-    features = df.drop(columns=["Class", "Time"], errors='ignore')
+    print("Scaling features...")
+    # X will contain Time and V1-V28, and Amount (30 features)
+    features = df.drop(columns=["Class"], errors='ignore') # Retain "Time" and "Amount" for scaling
     scaler = StandardScaler()
     scaled_features = scaler.fit_transform(features)
 
-    print("🔀 Preparing final dataset...")
+    print(" Preparing final dataset...")
     X = scaled_features
+    # NOTE: The target 'Class' column is what causes the dtype issue
     y = df["Class"].values
 
-    print("🔀 Splitting dataset (Train 80% / Test 20%)...")
+    print("Splitting dataset (Train 80% / Test 20%)...")
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    print(f"⚠️ Class balance before SMOTE → {np.bincount(y_train)}")
+    print("Casting target variables to integer...")
+    y_train = y_train.astype(int)
+    y_test = y_test.astype(int)
+    
+    print(f" Class balance before SMOTE → {np.bincount(y_train)}")
 
-    print("🤖 Applying SMOTE to balance classes...")
+    print(" Applying SMOTE to balance classes...")
     smote = SMOTE(random_state=42)
     X_res, y_res = smote.fit_resample(X_train, y_train)
 
     print(f"✅ Class balance after SMOTE → {np.bincount(y_res)}")
 
     # Train a simple logistic regression model
-    print("🧠 Training LogisticRegression model...")
+    print(" Training LogisticRegression model...")
     model = LogisticRegression(max_iter=1000)
     model.fit(X_res, y_res)
 
     # Evaluate
     preds = model.predict_proba(X_test)[:, 1]
     auc = roc_auc_score(y_test, preds)
-    print(f"📊 Test AUC: {auc:.4f}")
+    print(f"Test AUC: {auc:.4f}")
 
     # Save model and scaler
     os.makedirs('models', exist_ok=True)
     joblib.dump(model, 'models/logistic_model.joblib')
     joblib.dump(scaler, 'models/scaler.joblib')
-    print("💾 Model and scaler saved to /models")
+    print(" Model and scaler saved to /models")
 
     # MLflow logging (if available)
     if MLFLOW_AVAILABLE:
@@ -72,7 +78,7 @@ def main():
             mlflow.log_metric('test_auc', float(auc))
             mlflow.sklearn.log_model(model, 'model')
             mlflow.log_artifact('models/scaler.joblib')
-            print(f"✅ Logged run to MLflow experiment '{experiment_name}'")
+            print(f" Logged run to MLflow experiment '{experiment_name}'")
             
             # Register model if AUC meets threshold
             auc_threshold = float(os.getenv('MLFLOW_AUC_THRESHOLD', '0.95'))
