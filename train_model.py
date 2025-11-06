@@ -58,9 +58,9 @@ def main():
     joblib.dump(scaler, 'models/scaler.joblib')
     print(" Model and scaler saved to /models")
 
-    try:
+    if MLFLOW_AVAILABLE:
         mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000'))
-        experiment_name = os.getenv('MLFLOW_EXPERIMENT', 'fraud-detection-ci') 
+        experiment_name = os.getenv('MLFLOW_EXPERIMENT', 'fraud-detection')
         model_name = os.getenv('MLFLOW_MODEL_NAME', 'fraud-detection-model')
         mlflow.set_experiment(experiment_name)
         
@@ -70,11 +70,12 @@ def main():
             mlflow.log_artifact('models/scaler.joblib')
             print(f" Logged run to MLflow experiment '{experiment_name}'")
             
+            # Register model if AUC meets threshold
             auc_threshold = float(os.getenv('MLFLOW_AUC_THRESHOLD', '0.95'))
             if auc >= auc_threshold:
                 try:
                     result = mlflow.register_model(
-                        f"runs:/{mlflow.last_active_run().info.run_id}/model",
+                        f"runs:/{mlflow.active_run().info.run_id}/model",
                         model_name
                     )
                     print(f" Registered model version {result.version} (AUC {auc:.4f} >= {auc_threshold})")
@@ -82,9 +83,8 @@ def main():
                     print(f" Model registration failed: {e}")
             else:
                 print(f"ℹ Model not registered (AUC {auc:.4f} < {auc_threshold})")
-                
-    except Exception as e:
-        print(f" MLflow Tracking Failed (likely connection error): {e}")
+    else:
+        print("MLflow not available; skipping tracking")
 
 
 if __name__ == "__main__":
