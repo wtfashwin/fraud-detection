@@ -1,20 +1,29 @@
 groups:
-  - name: fraud-service.rules
+  - name: fraud-detection-alerts
     rules:
-      - alert: HighErrorRate
-        expr: increase(http_requests_total{job="fraud-api"}[5m]) - increase(http_requests_total{job="fraud-api",status=~"2.."}[5m]) > 10
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          summary: "High HTTP error rate on fraud-api"
-          description: "Error rate increased in the last 5 minutes."
-
-      - alert: CeleryTaskFailures
-        expr: increase(xai_task_failures_total[5m]) > 0
+      - alert: HighSHAPQueueDepth
+        expr: sum(redis_queue_length{queue="celery"}) > 1000
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "XAI task failures detected"
-          description: "One or more XAI tasks failed in the last 5 minutes. Check worker logs."
+          summary: "SHAP queue depth is too high"
+          description: "The SHAP computation queue has more than 1000 tasks pending for more than 2 minutes. Check worker scaling and performance."
+
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate detected"
+          description: "More than 5% of requests are returning 5xx errors. Immediate attention required."
+
+      - alert: HighLatency
+        expr: histogram_quantile(0.95, rate(api_inference_duration_seconds_bucket[5m])) > 2
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency"
+          description: "95th percentile API response time is over 2 seconds. Performance degradation detected."

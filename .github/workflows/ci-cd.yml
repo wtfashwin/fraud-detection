@@ -110,6 +110,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Add Trivy scanning step
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ghcr.io/${{ env.REGISTRY_OWNER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
@@ -135,11 +146,12 @@ jobs:
           name: model-artifacts
         timeout-minutes: 5
 
-      - name: Start Minikube
-        uses: helm/minikube-action@v2
+      - name: Set up Minikube
+        uses: medyagh/setup-minikube@latest
         with:
           minikube-version: '1.30.0'
           kubernetes-version: '1.27.0'
+          driver: 'docker'
         timeout-minutes: 5
 
       - name: Wait for Minikube to be Ready
@@ -167,6 +179,7 @@ jobs:
 
       - name: Deploy Helm chart (upgrade/install)
         run: |
+          helm dependency update ./charts/fraud-detection
           helm upgrade --install fraud-detection ./charts/fraud-detection \
             --set api.image.repository=${{ env.REGISTRY }}/${{ env.REGISTRY_OWNER }}/${{ env.IMAGE_NAME }} \
             --set api.image.tag=${{ github.sha }} \
@@ -178,9 +191,9 @@ jobs:
           kubectl rollout status deployment/fraud-api --namespace default --timeout=180s
         timeout-minutes: 6
 
-      - name: Verify API health endpoint
+      - name: Smoke test - Verify API health endpoint
         run: |
           kubectl port-forward deploy/fraud-api 8000:8000 &
-          sleep 3
+          sleep 10
           curl -f http://localhost:8000/health
         timeout-minutes: 2

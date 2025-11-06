@@ -22,6 +22,7 @@ worker:
     repository: fraud-api  
     tag: latest
     pullPolicy: IfNotPresent
+  maxReplicas: 10
   resources:
     requests:
       cpu: 100m

@@ -5,13 +5,14 @@ metadata:
 spec:
   scaleTargetRef:
     name: fraud-xai-worker
-  pollingInterval: 30
+  pollingInterval: 10  # Check every 10 seconds instead of 30
   cooldownPeriod: 300
-  minReplicaCount: 1
+  minReplicaCount: 0   # Allow scaling down to 0
   maxReplicaCount: 10
   triggers:
     - type: redis
       metadata:
         address: redis-master:6379
         listName: celery
-        listLength: '5'
+        listLength: '10'           # Scale when queue has 10+ items
+        activationListLength: '5'  # Start scaling when queue has 5+ items

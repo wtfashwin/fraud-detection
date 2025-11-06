@@ -8,6 +8,7 @@ from celery import Celery
 from celery.utils.log import get_task_logger
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
 
 from db.db import SessionLocal
 from db.models import TransactionResult, StatusEnum
@@ -55,11 +56,43 @@ except Exception:
     logger.exception("Failed to start Prometheus HTTP server for worker")
 
 # --- Celery App Initialization ---
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
-celery_app = Celery("xai_tasks", broker=CELERY_BROKER_URL)
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "sentinel://redis-master:26379/0")
+# Add Redis result backend for DLQ implementation
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis-master:6379/2")
 
+celery_app = Celery("xai_tasks", broker=CELERY_BROKER_URL, backend=CELERY_RESULT_BACKEND)
 
-@celery_app.task(bind=True, max_retries=5, acks_late=True)
+# Configure Celery with retry and DLQ settings
+celery_app.conf.update(
+    task_routes={
+        'xai_tasks.compute_shap': {
+            'queue': 'xai_tasks',
+            'routing_key': 'xai_tasks.compute_shap'
+        }
+    },
+    task_default_queue='xai_tasks',
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
+    task_reject_on_worker_lost=True,
+)
+
+# Define PII fields that should be masked
+PII_FIELDS = {
+    'user_id', 'customer_id', 'account_number', 'cc_number', 'credit_card',
+    'ssn', 'social_security', 'phone', 'email', 'address'
+}
+
+# Add environment variable for SHAP background size
+SHAP_BG_SIZE = int(os.getenv('SHAP_BG_SIZE', 100))
+
+@celery_app.task(
+    bind=True, 
+    autoretry_for=(Exception,), 
+    retry_backoff=True, 
+    max_retries=3, 
+    retry_jitter=True,
+    acks_late=True
+)
 def compute_shap(self, transaction_id: str, input_data: dict, correlation_id: str | None = None):
     """
     Celery task that computes prediction and SHAP-like attributions and writes results to Postgres.
@@ -112,6 +145,23 @@ def compute_shap(self, transaction_id: str, input_data: dict, correlation_id: st
             logger.warning("Model lacks coefficients for simple XAI: %s. Using simple feature values.", e)
             for k, v in input_data.items():
                  shap_values[k] = float(v) 
+        
+        # 4. PII Redaction
+        # Mask sensitive fields before storing
+        masked_shap_values = {}
+        for k, v in shap_values.items():
+            if k.lower() in PII_FIELDS:
+                masked_shap_values[k] = '***'  # Mask PII fields
+            else:
+                masked_shap_values[k] = v
+        
+        # Convert to JSON string for storage
+        shap_json = json.dumps(masked_shap_values)
+        
+        # 5. Store results with SERIALIZABLE isolation level
+        # Begin a transaction with SERIALIZABLE isolation level
+        session.execute(text("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"))
+        
         rec = session.get(TransactionResult, _uuid.UUID(transaction_id))
 
         if not rec:
@@ -123,7 +173,7 @@ def compute_shap(self, transaction_id: str, input_data: dict, correlation_id: st
             session.add(rec)
             logger.warning("Record not found, creating new COMPLETED record for %s", transaction_id)
         
-        rec.shap_values = shap_values
+        rec.shap_values = masked_shap_values
         rec.prediction_score = pred_proba
         rec.status = StatusEnum.COMPLETED
 
@@ -157,6 +207,22 @@ def compute_shap(self, transaction_id: str, input_data: dict, correlation_id: st
             raise self.retry(exc=exc, countdown=10)
         except self.MaxRetriesExceededError:
             logger.error("Max retries exceeded for %s. Final status: FAILED.", transaction_id)
+            # Send to DLQ by storing in a separate table or Redis list
+            try:
+                # Store failed task in Redis DLQ
+                dlq_key = "dlq:failed_shap_tasks"
+                failed_task_data = {
+                    "transaction_id": transaction_id,
+                    "input_data": input_data,
+                    "correlation_id": correlation_id,
+                    "error": str(exc),
+                    "timestamp": _uuid.uuid1().time
+                }
+                celery_app.backend.lpush(dlq_key, json.dumps(failed_task_data))
+                logger.info("Task sent to DLQ: %s", transaction_id)
+            except Exception as dlq_error:
+                logger.error("Failed to send task to DLQ: %s", dlq_error)
+            
             return {"transaction_id": transaction_id, "status": "FAILED"}
 
     finally:
