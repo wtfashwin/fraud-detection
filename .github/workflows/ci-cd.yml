@@ -146,12 +146,11 @@ jobs:
           name: model-artifacts
         timeout-minutes: 5
 
-      - name: Set up Minikube
-        uses: medyagh/setup-minikube@latest
+      - name: Start Minikube
+        uses: helm/minikube-action@v2
         with:
           minikube-version: '1.30.0'
           kubernetes-version: '1.27.0'
-          driver: 'docker'
         timeout-minutes: 5
 
       - name: Wait for Minikube to be Ready
@@ -179,7 +178,6 @@ jobs:
 
       - name: Deploy Helm chart (upgrade/install)
         run: |
-          helm dependency update ./charts/fraud-detection
           helm upgrade --install fraud-detection ./charts/fraud-detection \
             --set api.image.repository=${{ env.REGISTRY }}/${{ env.REGISTRY_OWNER }}/${{ env.IMAGE_NAME }} \
             --set api.image.tag=${{ github.sha }} \

@@ -7,12 +7,10 @@ from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
 
-
 class StatusEnum(str, enum.Enum):
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
-
 
 class TransactionResult(Base):
     __tablename__ = "transaction_results"
@@ -25,11 +23,8 @@ class TransactionResult(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Add unique constraint to prevent duplicate computations
     __table_args__ = (UniqueConstraint('id', name='uq_transaction_id'),)
 
-
-# Define a separate table for SHAP explanations with schema enforcement
 class SHAPExplanation(Base):
     __tablename__ = "shap_explanations"
 
@@ -42,6 +37,9 @@ class SHAPExplanation(Base):
     # Add schema enforcement for JSONB column
     __table_args__ = (
         UniqueConstraint('transaction_id', name='uq_shap_transaction_id'),
-        # Add CHECK constraint to ensure shap_values is an array
-        text("ALTER TABLE shap_explanations ADD CONSTRAINT check_shap_schema CHECK (jsonb_typeof(shap_values) = 'array')"),
+        
+        CheckConstraint(
+            func.jsonb_typeof(shap_values) == 'array', 
+            name='check_shap_is_array'
+        ),
     )
