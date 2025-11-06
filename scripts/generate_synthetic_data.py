@@ -2,7 +2,6 @@ import os
 import numpy as np
 import pandas as pd
 output_file_path = 'data/creditcard.csv' 
-df.to_csv(output_file_path, index=False)
 
 def generate_synthetic_data(n_samples=1000, n_features=30, fraud_ratio=0.01):
     """Generate synthetic credit card transaction data for testing."""
@@ -35,11 +34,11 @@ def main():
     
     print(f"Generating {ci_samples} samples for CI testing...")
     ci_data = generate_synthetic_data(n_samples=ci_samples)
-    ci_data.to_csv('data/synthetic_ci.csv', index=False)
+    ci_data.to_csv(output_file_path, index=False)
     
     print(f"Generating {test_samples} samples for local testing...")
     test_data = generate_synthetic_data(n_samples=test_samples)
-    test_data.to_csv('data/synthetic_test.csv', index=False)
+    test_data.to_csv(output_file_path, index=False)
     
 if __name__ == '__main__':
     main()
