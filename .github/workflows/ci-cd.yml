@@ -69,6 +69,12 @@ jobs:
         env:
           CI_SYNTHETIC_SAMPLES: "500"
         timeout-minutes: 5
+      
+      - name: Verify Data File Exists
+        run: |
+          # List the contents of the 'data' directory
+          echo "Listing contents of 'data/' directory:"
+          ls -l data/
 
       - name: Set PYTHONPATH
         run: echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
