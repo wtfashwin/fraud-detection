@@ -24,13 +24,11 @@ jobs:
     timeout-minutes: 40
     services:
       mlflow:
+        image: ghcr.io/mlflow/mlflow:latest  
         ports:
           - 5000:5000
-        options: >
-          --name mlflow-server
-          --health-cmd "curl --fail http://localhost:5000/health || exit 1"
-          --health-interval 5s
-          --health-retries 10
+        options: --name mlflow-server --health-cmd "curl --fail http://mlflow:5000 || exit 1" --health-interval 5s --health-retries 10
+        condition: service_healthy
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
