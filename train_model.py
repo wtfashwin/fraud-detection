@@ -18,7 +18,7 @@ except Exception:
 
 def main():
     print("Loading dataset...")
-    df = pd.read_csv(os.getenv('DATA_CSV', 'data/creditcard.csv'))
+    df = pd.read_csv('DATA_CSV', 'data/creditcard.csv')
 
     print("Checking missing values...")
     print(df.isnull().sum())

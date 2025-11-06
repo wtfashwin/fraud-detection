@@ -67,7 +67,7 @@ jobs:
         run: |
           python scripts/generate_synthetic_data.py
         env:
-          CI_SYNTHETIC_SAMPLES: "1000"
+          CI_SYNTHETIC_SAMPLES: "500"
         timeout-minutes: 5
 
       - name: Set PYTHONPATH
