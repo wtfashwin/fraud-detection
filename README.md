@@ -39,7 +39,7 @@ python scripts/generate_synthetic_data.py
 3. Train and register model:
 ```bash
 # Set environment variables for MLflow (optional)
-export MLFLOW_TRACKING_URI=http://localhost:5000
+export MLFLOW_TRACKING_URI=http://mlflow:5000
 export MLFLOW_EXPERIMENT=fraud-detection
 export MLFLOW_MODEL_NAME=fraud-detection-model
 export MLFLOW_AUC_THRESHOLD=0.95

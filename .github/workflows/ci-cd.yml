@@ -73,7 +73,7 @@ jobs:
           python train_model.py
         env:
           DATA_CSV: data/synthetic_ci.csv
-          MLFLOW_TRACKING_URI: http://localhost:5000
+          MLFLOW_TRACKING_URI: http://mlflow:5000
           MLFLOW_EXPERIMENT: fraud-detection-ci
           MLFLOW_MODEL_NAME: fraud-detection-model-ci
           MLFLOW_AUC_THRESHOLD: "0.70"
