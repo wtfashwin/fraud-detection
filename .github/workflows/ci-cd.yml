@@ -24,7 +24,6 @@ jobs:
     timeout-minutes: 40
     services:
       mlflow:
-        image: ghcr.io/mlflow/mlflow:latest  
         ports:
           - 5000:5000
         options: >
