@@ -188,7 +188,7 @@ jobs:
 
       - name: Wait for API deployment rollout
         run: |
-          kubectl rollout status deployment/fraud-api --namespace default --timeout=180s
+          kubectl rollout status deployment/fraud-detection-api --namespace default --timeout=180s
         timeout-minutes: 6
 
       - name: Verify API health endpoint
