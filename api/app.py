@@ -208,55 +208,40 @@ async def predict(transaction: TransactionIn, request: Request):
         )
 
     with inference_time.time():
-        # Use the correct MLflow PyFunc model interface
         prediction_result = MODEL.predict(X)
-        # Simple and safe conversion - avoid complex typing checks
         prediction = 0
         try:
-            # Convert to string, clean it, and extract a number
             pred_str = str(prediction_result)
-            # Remove brackets and other characters
             clean_str = ''.join(c for c in pred_str if c.isdigit() or c in '.-')
             if clean_str:
                 prediction = int(float(clean_str.split('.')[0]) if '.' in clean_str else clean_str)
         except:
-            # Ultimate fallback
             prediction = 0
         
-        # Try to get probability scores if the model supports it
         score = 0.0
         try:
-            # Use getattr to safely access predict_proba
             predict_proba_func = getattr(MODEL, 'predict_proba', None)
             if predict_proba_func and callable(predict_proba_func):
                 proba_result = predict_proba_func(X)
-                # Simple conversion - convert to string and extract a float value
                 try:
                     proba_str = str(proba_result)
-                    # Extract all numbers from the string
                     import re
                     numbers = re.findall(r'[0-9]+\.?[0-9]*', proba_str)
                     if len(numbers) >= 2:
-                        # Take the second number (often the probability of positive class)
                         score = float(numbers[1])
                     elif len(numbers) >= 1:
-                        # Take the first number
                         score = float(numbers[0])
                     else:
                         score = 0.0
                 except:
-                    # Ultimate fallback
                     score = 0.0
             else:
-                # If predict_proba is not available, use a default score
                 score = 0.5
         except Exception as e:
             logger.warning(f"Could not get probability score: {e}")
             score = 0.5
 
     try:
-        # Use the correct Celery task interface
-        # Convert features list to dict for the Celery task
         features_dict = {f"feature_{i}": float(val) for i, val in enumerate(transaction.features)}
         task = xai_tasks.celery_app.send_task('xai_tasks.compute_shap', 
                                    args=[transaction.transaction_id, features_dict, corr_id])

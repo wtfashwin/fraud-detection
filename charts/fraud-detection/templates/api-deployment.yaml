@@ -26,6 +26,8 @@ spec:
         prometheus.io/path: /metrics
         prometheus.io/port: "8000"
     spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
       containers:
       - name: {{ .Values.api.name }}
         image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
@@ -52,8 +54,8 @@ spec:
           httpGet:
             path: /health
             port: 8000
-          initialDelaySeconds: 5
-          periodSeconds: 10
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
         livenessProbe:
           httpGet:
             path: /status
