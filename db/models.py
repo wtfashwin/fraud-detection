@@ -1,10 +1,12 @@
 import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Float, DateTime, Enum, UniqueConstraint, text
+from sqlalchemy import (
+    Column, String, Float, DateTime, Enum, 
+    UniqueConstraint, text, CheckConstraint, func
+)
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.ext.declarative import declarative_base
-
 Base = declarative_base()
 
 class StatusEnum(str, enum.Enum):
