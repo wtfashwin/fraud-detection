@@ -118,7 +118,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Fraud Detection API", version="1.0.0", lifespan=lifespan) 
 
 class TransactionIn(BaseModel):
-    transaction_id: str = Depends(lambda: str(uuid.uuid4()))
+    transaction_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     features: list 
 
 class PredictionOut(BaseModel):
