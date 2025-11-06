@@ -33,10 +33,14 @@ spec:
         ports:
         - containerPort: 8000
         env:
-        - name: REDIS_URL
-          value: "redis://{{ .Release.Name }}-redis-master:6379/0"
         - name: DATABASE_URL
-          value: "postgresql://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql:5432/{{ .Values.postgresql.auth.database }}"
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "fraud-detection.fullname" . }}-db
+              key: DATABASE_URL
+        # Updated to use Redis with Sentinel for HA
+        - name: CELERY_BROKER_URL
+          value: "sentinel://{{ .Release.Name }}-redis-master:26379/0"
         - name: MLFLOW_TRACKING_URI
           value: "http://{{ .Release.Name }}-mlflow:5000"
         - name: OTEL_SERVICE_NAME

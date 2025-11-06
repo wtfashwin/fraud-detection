@@ -31,9 +31,25 @@ worker:
       memory: 512Mi
 
 redis:
-  architecture: standalone
+  architecture: replication
   auth:
     enabled: false  # Disable auth for local development
+  master:
+    persistence:
+      enabled: true
+      size: 1Gi
+  slave:
+    persistence:
+      enabled: true
+      size: 1Gi
+  sentinel:
+    enabled: true
+    masterSet: mymaster
+    initialCheckTimeout: 5
+    quorum: 2
+    downAfterMilliseconds: 5000
+    failoverTimeout: 10000
+    parallelSyncs: 1
 
 postgresql:
   auth:

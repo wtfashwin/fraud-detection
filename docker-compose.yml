@@ -1,8 +1,37 @@
 services:
   # --- DATABASE SERVICES ---
-  redis:
+  # Redis with Sentinel for high availability
+  redis-master:
     image: redis:6-alpine
+    command: redis-server --appendonly yes
     restart: always
+    networks:
+      - internal
+
+  redis-slave:
+    image: redis:6-alpine
+    command: redis-server --slaveof redis-master 6379
+    restart: always
+    depends_on:
+      - redis-master
+    networks:
+      - internal
+
+  redis-sentinel:
+    image: redis:6-alpine
+    command: >
+      bash -c "
+        echo 'port 26379' > sentinel.conf &&
+        echo 'sentinel monitor mymaster redis-master 6379 2' >> sentinel.conf &&
+        echo 'sentinel down-after-milliseconds mymaster 5000' >> sentinel.conf &&
+        echo 'sentinel failover-timeout mymaster 10000' >> sentinel.conf &&
+        echo 'sentinel parallel-syncs mymaster 1' >> sentinel.conf &&
+        redis-sentinel sentinel.conf
+      "
+    restart: always
+    depends_on:
+      - redis-master
+      - redis-slave
     networks:
       - internal
 
@@ -44,10 +73,11 @@ services:
     build: .
     entrypoint: ["sh", "-c", "/app/run_migrations.sh && exec gunicorn -k uvicorn.workers.UvicornWorker api.app:app --bind 0.0.0.0:8000 --workers 2"]
     environment:
-      CELERY_BROKER_URL: redis://redis:6379/0
+      # Updated to use Redis Sentinel
+      CELERY_BROKER_URL: sentinel://redis-master:26379/0
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-fraud}
     depends_on:
-      redis:
+      redis-sentinel:
         condition: service_started
       postgres:
         condition: service_healthy
@@ -67,10 +97,11 @@ services:
     build: .
     entrypoint: ["sh", "-c", "celery -A xai_tasks.celery_app worker --loglevel=info --concurrency=1"]
     environment:
-      CELERY_BROKER_URL: redis://redis:6379/0
+      # Updated to use Redis Sentinel
+      CELERY_BROKER_URL: sentinel://redis-master:26379/0
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-fraud}
     depends_on:
-      redis:
+      redis-sentinel:
         condition: service_started
       postgres:
         condition: service_healthy
