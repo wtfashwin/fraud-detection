@@ -26,8 +26,6 @@ spec:
         prometheus.io/path: /metrics
         prometheus.io/port: "8000"
     spec:
-      imagePullSecrets:
-        - name: ghcr-secret
       containers:
       - name: {{ .Values.api.name }}
         image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
@@ -65,4 +63,4 @@ spec:
         lifecycle:
           preStop:
             exec:
-              command: ["/bin/sh", "-c", "sleep 5"] 
+              command: ["/bin/sh", "-c", "sleep 5"]

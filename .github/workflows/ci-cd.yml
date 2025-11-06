@@ -186,6 +186,46 @@ jobs:
             --timeout 5m
         timeout-minutes: 8
 
+      # Debugging steps to identify deployment issues
+      - name: Get Pod Status for Debugging
+        run: |
+          echo "=== Getting Pod Status ==="
+          kubectl get pods -l app.kubernetes.io/name=fraud-detection-api --namespace default
+        if: ${{ always() }}
+        timeout-minutes: 1
+
+      - name: Describe Pods for Detailed Error Messages
+        run: |
+          echo "=== Describing Pods ==="
+          # Get the name of the failing pod
+          POD_NAMES=$(kubectl get pods -l app.kubernetes.io/name=fraud-detection-api -o jsonpath="{.items[*].metadata.name}" --namespace default)
+          
+          for POD_NAME in $POD_NAMES; do
+            echo "--- Describing Pod: $POD_NAME ---"
+            kubectl describe pod "$POD_NAME" --namespace default
+            echo ""
+          done
+        if: ${{ always() }}
+        timeout-minutes: 2
+
+      - name: Get Pod Logs
+        run: |
+          echo "=== Getting Pod Logs ==="
+          # Get the names of all pods
+          POD_NAMES=$(kubectl get pods -l app.kubernetes.io/name=fraud-detection-api -o jsonpath="{.items[*].metadata.name}" --namespace default)
+          
+          for POD_NAME in $POD_NAMES; do
+            echo "--- Getting Logs for Pod: $POD_NAME ---"
+            kubectl logs "$POD_NAME" --namespace default || echo "Failed to get logs for $POD_NAME"
+            
+            # Check logs for a previous instance if it's crashing
+            echo "--- Getting Previous Logs for Pod: $POD_NAME ---"
+            kubectl logs "$POD_NAME" --previous --namespace default || echo "No previous logs available for $POD_NAME"
+            echo ""
+          done
+        if: ${{ always() }}
+        timeout-minutes: 2
+
       - name: Wait for API deployment rollout
         run: |
           kubectl rollout status deployment/fraud-detection-api --namespace default --timeout=180s
@@ -193,7 +233,16 @@ jobs:
 
       - name: Verify API health endpoint
         run: |
-          kubectl port-forward deploy/fraud-api 8000:8000 &
-          sleep 3
-          curl -f http://localhost:8000/health
+          echo "=== Checking API Health ==="
+          # Wait a bit for the service to be available
+          sleep 10
+          # Get the service port
+          kubectl port-forward service/fraud-detection-api 8000:8000 &
+          PORT_FORWARD_PID=$!
+          # Give port-forward time to start
+          sleep 5
+          # Try to access the health endpoint
+          curl -f http://localhost:8000/health || echo "Health check failed"
+          # Kill the port-forward process
+          kill $PORT_FORWARD_PID
         timeout-minutes: 2
