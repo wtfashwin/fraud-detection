@@ -24,14 +24,12 @@ def main():
     print(df.isnull().sum())
 
     print("Scaling features...")
-    # X will contain Time and V1-V28, and Amount (30 features)
-    features = df.drop(columns=["Class"], errors='ignore') # Retain "Time" and "Amount" for scaling
+    features = df.drop(columns=["Class"], errors='ignore') 
     scaler = StandardScaler()
     scaled_features = scaler.fit_transform(features)
 
     print(" Preparing final dataset...")
     X = scaled_features
-    # NOTE: The target 'Class' column is what causes the dtype issue
     y = df["Class"].values
 
     print("Splitting dataset (Train 80% / Test 20%)...")
@@ -49,27 +47,23 @@ def main():
     smote = SMOTE(random_state=42)
     X_res, y_res = smote.fit_resample(X_train, y_train)
 
-    print(f"✅ Class balance after SMOTE → {np.bincount(y_res)}")
+    print(f" Class balance after SMOTE → {np.bincount(y_res)}")
 
-    # Train a simple logistic regression model
     print(" Training LogisticRegression model...")
     model = LogisticRegression(max_iter=1000)
     model.fit(X_res, y_res)
 
-    # Evaluate
     preds = model.predict_proba(X_test)[:, 1]
     auc = roc_auc_score(y_test, preds)
     print(f"Test AUC: {auc:.4f}")
 
-    # Save model and scaler
     os.makedirs('models', exist_ok=True)
     joblib.dump(model, 'models/logistic_model.joblib')
     joblib.dump(scaler, 'models/scaler.joblib')
     print(" Model and scaler saved to /models")
 
-    # MLflow logging (if available)
     if MLFLOW_AVAILABLE:
-        mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://localhost:5000'))
+        mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000'))
         experiment_name = os.getenv('MLFLOW_EXPERIMENT', 'fraud-detection')
         model_name = os.getenv('MLFLOW_MODEL_NAME', 'fraud-detection-model')
         mlflow.set_experiment(experiment_name)
@@ -88,11 +82,11 @@ def main():
                         f"runs:/{mlflow.active_run().info.run_id}/model",
                         model_name
                     )
-                    print(f"✨ Registered model version {result.version} (AUC {auc:.4f} >= {auc_threshold})")
+                    print(f" Registered model version {result.version} (AUC {auc:.4f} >= {auc_threshold})")
                 except Exception as e:
-                    print(f"⚠️ Model registration failed: {e}")
+                    print(f" Model registration failed: {e}")
             else:
-                print(f"ℹ️ Model not registered (AUC {auc:.4f} < {auc_threshold})")
+                print(f"ℹ Model not registered (AUC {auc:.4f} < {auc_threshold})")
     else:
         print("MLflow not available; skipping tracking")
 

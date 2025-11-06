@@ -9,17 +9,13 @@ import matplotlib.pyplot as plt
 
 print("📥 Loading model, scaler, and data...")
 
-# Load preprocessed test data
 data = np.load('data/preprocessed_data.npz')
 X_test, y_test = data['X_test'], data['y_test']
 
-# Load scaler and model
 scaler = joblib.load('models/scaler.joblib')
 model = joblib.load('models/logistic_model.joblib')
 
-# Scale test features if not already scaled (usually they should be scaled)
-# But if your saved X_test is already scaled, skip this step.
-# For safety:
+
 X_test_scaled = scaler.transform(X_test)
 
 print("🔍 Setting up SHAP explainer...")

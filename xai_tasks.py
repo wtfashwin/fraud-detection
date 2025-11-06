@@ -109,21 +109,12 @@ def compute_shap(self, transaction_id: str, input_data: dict, correlation_id: st
                 shap_values[fname] = float(attr)
 
         except Exception as e:
-            # Fallback attribution if model lacks coefficients (e.g., Tree-based model)
-            # A future optimization (Phase 2) would involve using the real SHAP library here.
             logger.warning("Model lacks coefficients for simple XAI: %s. Using simple feature values.", e)
             for k, v in input_data.items():
                  shap_values[k] = float(v) 
-
-        
-        # 4. Persistence (Find and Update Transaction Result in Postgres)
-        
-        # Ensure we have a pending record, then update it.
-        # This relies on the FastAPI endpoint having created the initial PENDING record.
         rec = session.get(TransactionResult, _uuid.UUID(transaction_id))
 
         if not rec:
-            # Defensive creation if it wasn't pre-created (shouldn't happen in production flow)
             rec = TransactionResult(
                 id=_uuid.UUID(transaction_id),
                 input_data=input_data,
@@ -141,15 +132,12 @@ def compute_shap(self, transaction_id: str, input_data: dict, correlation_id: st
         return {"transaction_id": transaction_id, "status": "COMPLETED"}
 
     except SQLAlchemyError as exc:
-        # DB connection or transaction error
         session.rollback()
         logger.error("Database (SQLAlchemy) error for %s: %s", transaction_id, exc)
         
-        # Attempt to retry the whole task
         raise self.retry(exc=exc, countdown=5)
     
     except Exception as exc:
-        # General exception (e.g., Model load failed, unexpected processing error)
         session.rollback()
         logger.exception("Unrecoverable processing error for %s: %s", transaction_id, exc)
         
