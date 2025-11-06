@@ -1,192 +1,25 @@
 {
-  "dashboard": {
-    "id": null,
-    "title": "Fraud Detection Dashboard",
-    "timezone": "browser",
-    "schemaVersion": 16,
-    "version": 0,
-    "refresh": "5s",
-    "panels": [
-      {
-        "id": 1,
-        "type": "graph",
-        "title": "Prediction Requests",
-        "gridPos": {
-          "x": 0,
-          "y": 0,
-          "w": 12,
-          "h": 8
-        },
-        "targets": [
-          {
-            "expr": "rate(predictions_submitted_total[5m])",
-            "legendFormat": "Requests per second"
-          }
-        ],
-        "xaxis": {
-          "mode": "time"
-        },
-        "yaxes": [
-          {
-            "format": "short",
-            "label": "Requests/sec"
-          },
-          {
-            "format": "short"
-          }
-        ]
-      },
-      {
-        "id": 2,
-        "type": "graph",
-        "title": "Model Inference Time",
-        "gridPos": {
-          "x": 12,
-          "y": 0,
-          "w": 12,
-          "h": 8
-        },
-        "targets": [
-          {
-            "expr": "rate(api_inference_duration_seconds_sum[5m]) / rate(api_inference_duration_seconds_count[5m])",
-            "legendFormat": "Average inference time"
-          }
-        ],
-        "xaxis": {
-          "mode": "time"
-        },
-        "yaxes": [
-          {
-            "format": "s",
-            "label": "Seconds"
-          },
-          {
-            "format": "short"
-          }
-        ]
-      },
-      {
-        "id": 3,
-        "type": "graph",
-        "title": "SHAP Queue Depth",
-        "gridPos": {
-          "x": 0,
-          "y": 8,
-          "w": 12,
-          "h": 8
-        },
-        "targets": [
-          {
-            "expr": "redis_queue_length{queue=\"celery\"}",
-            "legendFormat": "Queue depth"
-          }
-        ],
-        "xaxis": {
-          "mode": "time"
-        },
-        "yaxes": [
-          {
-            "format": "short",
-            "label": "Tasks"
-          },
-          {
-            "format": "short"
-          }
-        ]
-      },
-      {
-        "id": 4,
-        "type": "stat",
-        "title": "Current SHAP Queue Depth",
-        "gridPos": {
-          "x": 12,
-          "y": 8,
-          "w": 12,
-          "h": 4
-        },
-        "targets": [
-          {
-            "expr": "redis_queue_length{queue=\"celery\"}",
-            "instant": true
-          }
-        ],
-        "options": {
-          "colorMode": "value",
-          "graphMode": "none",
-          "justifyMode": "auto",
-          "orientation": "auto",
-          "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ],
-            "fields": "",
-            "values": false
-          },
-          "textMode": "auto"
-        }
-      }
-    ],
-    "alertRules": [
-      {
-        "name": "High SHAP Queue Depth",
-        "condition": "A",
-        "noDataState": "no_data",
-        "execErrState": "alerting",
-        "frequency": "1m",
-        "for": "2m",
-        "alertRuleTags": {},
-        "annotations": {
-          "summary": "SHAP queue depth is too high",
-          "description": "The SHAP computation queue has more than 1000 tasks pending for more than 2 minutes"
-        },
-        "labels": {
-          "severity": "warning"
-        },
-        "data": [
-          {
-            "refId": "A",
-            "relativeTimeRange": {
-              "from": 120,
-              "to": 0
-            },
-            "datasourceUid": "Prometheus",
-            "model": {
-              "expr": "sum(redis_queue_length{queue=\"celery\"})",
-              "intervalMs": 1000,
-              "maxDataPoints": 43200,
-              "refId": "A"
-            }
-          }
-        ],
-        "conditions": [
-          {
-            "evaluator": {
-              "params": [
-                1000
-              ],
-              "type": "gt"
-            },
-            "operator": {
-              "type": "and"
-            },
-            "query": {
-              "params": [
-                "A"
-              ]
-            },
-            "reducer": {
-              "params": [],
-              "type": "avg"
-            },
-            "type": "query"
-          }
-        ],
-        "notifications": [
-          {
-            "uid": "slack-notifications"
-          }
-        ]
-      }
-    ]
-  }
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "graph",
+      "title": "API Request Rate",
+      "targets": [
+        { "expr": "http_requests_total", "legendFormat": "requests" }
+      ],
+      "id": 1
+    },
+    {
+      "type": "graph",
+      "title": "XAI Task Duration (s)",
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(xai_task_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" }
+      ],
+      "id": 2
+    }
+  ],
+  "schemaVersion": 16,
+  "title": "Fraud Detection Observability"
 }

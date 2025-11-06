@@ -1,18 +1,18 @@
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: {{ include "fraud-detection.fullname" . }}-worker-scaledobject
+  name: {{ .Values.worker.name }}-scaler
 spec:
   scaleTargetRef:
-    name: {{ include "fraud-detection.fullname" . }}-xai-worker
-  pollingInterval: 10
-  cooldownPeriod: 300
+    name: {{ .Values.worker.name }}
   minReplicaCount: 0
-  maxReplicaCount: {{ .Values.worker.maxReplicas | default 10 }}
+  maxReplicaCount: 10
+  pollingInterval: 15
+  cooldownPeriod: 30
   triggers:
-    - type: redis
-      metadata:
-        address: {{ .Release.Name }}-redis-master:6379
-        listName: celery
-        listLength: "10"
-        activationListLength: "5"
+  - type: redis
+    metadata:
+      address: redis://{{ .Release.Name }}-redis-master:6379
+      listName: celery
+      listLength: "5"
+      enableTLS: "false"

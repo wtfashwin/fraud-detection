@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Float, DateTime, Enum, UniqueConstraint, CheckConstraint
+from sqlalchemy import Column, String, Float, DateTime, Enum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -24,23 +24,3 @@ class TransactionResult(Base):
     status = Column(Enum(StatusEnum), nullable=False, default=StatusEnum.PENDING)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Add unique constraint to prevent duplicate computations
-    __table_args__ = (UniqueConstraint('id', name='uq_transaction_id'),)
-
-
-# Define a separate table for SHAP explanations with schema enforcement
-class SHAPExplanation(Base):
-    __tablename__ = "shap_explanations"
-
-    transaction_id = Column(String(255), primary_key=True)
-    correlation_id = Column(String(255))
-    shap_values = Column(JSONB, nullable=False)
-    feature_names = Column(JSONB)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    __table_args__ = (
-        UniqueConstraint('transaction_id', name='uq_shap_transaction_id'),
-        
-        CheckConstraint("jsonb_typeof(shap_values) = 'array'", name='check_shap_schema')
-    )
