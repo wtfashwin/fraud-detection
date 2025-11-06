@@ -26,6 +26,8 @@ spec:
         prometheus.io/path: /metrics
         prometheus.io/port: "8000"
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
       - name: {{ .Values.api.name }}
         image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
@@ -38,7 +40,6 @@ spec:
             secretKeyRef:
               name: {{ include "fraud-detection.fullname" . }}-db
               key: DATABASE_URL
-        # Updated to use Redis with Sentinel for HA
         - name: CELERY_BROKER_URL
           value: "sentinel://{{ include "fraud-detection.fullname" . }}-redis-master:26379/0"
         - name: MLFLOW_TRACKING_URI
@@ -64,4 +65,4 @@ spec:
         lifecycle:
           preStop:
             exec:
-              command: ["/bin/sh", "-c", "sleep 5"]  # Grace period for in-flight requests
+              command: ["/bin/sh", "-c", "sleep 5"] 
