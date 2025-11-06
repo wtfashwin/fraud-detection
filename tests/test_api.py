@@ -11,6 +11,6 @@ def test_status():
 
 
 def test_predict_minimal():
-    payload = {"features": [0.1]*3}
+    payload = {"features": [0.1]*30}
     r = client.post("/predict", json=payload)
     assert r.status_code in (200, 202, 201)
