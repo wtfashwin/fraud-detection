@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request, Depends, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import joblib
 import uuid
 import pandas as pd
