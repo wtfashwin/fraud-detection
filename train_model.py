@@ -4,13 +4,12 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from imblearn.over_sampling import SMOTE
-from sklearn.linear_model import LogisticRegression
+from xgboost import XGBClassifier # 👈 NEW MODEL IMPORT
 from sklearn.metrics import roc_auc_score
 import joblib
 
 import mlflow
 import mlflow.sklearn
-
 
 def main():
     print("Loading dataset...")
@@ -19,45 +18,66 @@ def main():
     print("Checking missing values...")
     print(df.isnull().sum())
 
-    print("Scaling features...")
-    features = df.drop(columns=["Class"], errors='ignore') 
-    scaler = StandardScaler()
-    scaled_features = scaler.fit_transform(features)
-
-    print(" Preparing final dataset...")
-    X = scaled_features
-    y = df["Class"].values
-
+    # --- 1. SPLIT FIRST (CRITICAL CHANGE) ---
     print("Splitting dataset (Train 80% / Test 20%)...")
+    X = df.drop(columns=["Class"], errors='ignore').values
+    y = df["Class"].values
+    
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
+
+    # --- 2. SCALE AFTER SPLIT (CRITICAL CHANGE) ---
+    print("Scaling features (only fitting on Train set)...")
+    scaler = StandardScaler()
+    
+    # Fit and Transform on TRAINING data
+    X_train_scaled = scaler.fit_transform(X_train)
+    
+    # Transform on TESTING data (using parameters learned from training)
+    X_test_scaled = scaler.transform(X_test) 
 
     print("Casting target variables to integer...")
     y_train = y_train.astype(int)
     y_test = y_test.astype(int)
     
+    # Use the scaled training data for SMOTE
     print(f" Class balance before SMOTE → {np.bincount(y_train)}")
 
+    # --- 3. APPLY SMOTE ---
     print(" Applying SMOTE to balance classes...")
-    smote = SMOTE(random_state=42)
-    X_res, y_res = smote.fit_resample(X_train, y_train)
+    smote = SMOTE(random_state=42, sampling_strategy='minority')
+    X_res, y_res = smote.fit_resample(X_train_scaled, y_train) # Use scaled training data
 
     print(f" Class balance after SMOTE → {np.bincount(y_res)}")
 
-    print(" Training LogisticRegression model...")
-    model = LogisticRegression(max_iter=1000)
+    # --- 4. TRAIN XGBOOST MODEL ---
+    print(" Training XGBoost Classifier model...")
+    # Using good starting hyperparameters for a complex fraud dataset
+    model = XGBClassifier(
+        objective='binary:logistic',
+        n_estimators=100,
+        learning_rate=0.1,
+        max_depth=5,
+        use_label_encoder=False, 
+        eval_metric='logloss',
+        random_state=42,
+        n_jobs=-1
+    )
     model.fit(X_res, y_res)
 
-    preds = model.predict_proba(X_test)[:, 1]
+    # Use the scaled test data for prediction
+    preds = model.predict_proba(X_test_scaled)[:, 1] 
     auc = roc_auc_score(y_test, preds)
     print(f"Test AUC: {auc:.4f}")
 
+    # --- 5. SAVE MODEL AND SCALER ---
     os.makedirs('models', exist_ok=True)
-    joblib.dump(model, 'models/logistic_model.joblib')
+    joblib.dump(model, 'models/xgb_model.joblib')
     joblib.dump(scaler, 'models/scaler.joblib')
     print(" Model and scaler saved to /models")
 
+    # --- 6. MLFLOW TRACKING (using existing logic) ---
     try:
         mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000'))
         experiment_name = os.getenv('MLFLOW_EXPERIMENT', 'fraud-detection-ci') 
@@ -65,6 +85,7 @@ def main():
         mlflow.set_experiment(experiment_name)
         
         with mlflow.start_run():
+            mlflow.log_param('model_type', 'XGBoost') # Log the new model type
             mlflow.log_metric('test_auc', float(auc))
             mlflow.sklearn.log_model(model, 'model')
             mlflow.log_artifact('models/scaler.joblib')
