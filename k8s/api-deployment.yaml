@@ -23,7 +23,6 @@ spec:
                 secretKeyRef:
                   name: db-secret
                   key: DATABASE_URL
-            # Updated to use Redis with Sentinel for HA
             - name: CELERY_BROKER_URL
               value: sentinel://redis-master:26379/0
           readinessProbe:

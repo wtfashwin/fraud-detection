@@ -22,6 +22,7 @@ worker:
     repository: fraud-api  
     tag: latest
     pullPolicy: IfNotPresent
+  maxReplicas: 10
   resources:
     requests:
       cpu: 100m
@@ -38,7 +39,7 @@ redis:
     persistence:
       enabled: true
       size: 1Gi
-  slave:
+  replica:
     persistence:
       enabled: true
       size: 1Gi
@@ -63,7 +64,7 @@ postgresql:
 
 mlflow:
   backendStore:
-    databaseConnectionString: "postgresql://postgres:postgres@postgresql:5432/mlflow"
+    databaseConnectionString: "postgresql://postgres:postgres@fraud-detection-postgresql:5432/mlflow"
   artifactRoot:
     url: /mlflow/artifacts
 

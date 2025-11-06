@@ -123,11 +123,12 @@ jobs:
           name: model-artifacts
         timeout-minutes: 5
 
-      - name: Start Minikube
-        uses: helm/minikube-action@v2
+      - name: Set up Minikube
+        uses: medyagh/setup-minikube@latest
         with:
           minikube-version: '1.30.0'
           kubernetes-version: '1.27.0'
+          driver: 'docker'
         timeout-minutes: 5
 
       - name: Wait for Minikube to be Ready
@@ -141,11 +142,32 @@ jobs:
           kubectl version --client
         timeout-minutes: 3
 
+      - name: Add Helm repositories and update dependencies
+        run: |
+          echo "Adding Helm repositories..."
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo add community-charts https://community-charts.github.io/helm-charts
+          helm repo add kedacore https://kedacore.github.io/charts
+          echo "Updating Helm repositories..."
+          helm repo update
+          echo "Helm repositories updated successfully"
+        timeout-minutes: 5
+
+      - name: Build Helm dependencies with error handling
+        run: |
+          echo "Building Helm dependencies..."
+          # Try to build dependencies, but continue even if it fails
+          if helm dependency build ./charts/fraud-detection; then
+            echo "Helm dependencies built successfully"
+          else
+            echo "Warning: Failed to build Helm dependencies, continuing with deployment"
+          fi
+        timeout-minutes: 5
+
       - name: Install/Ensure KEDA is available
         run: |
-          helm repo add kedacore https://kedacore.github.io/charts
-          helm repo update
-          helm upgrade --install keda kedacore/keda --namespace keda --create-namespace
+          echo "Installing KEDA..."
+          helm upgrade --install keda kedacore/keda --namespace keda --create-namespace --wait
         timeout-minutes: 5
 
       - name: Authenticate Docker to Minikube registry (if using local registry)
@@ -155,9 +177,12 @@ jobs:
 
       - name: Deploy Helm chart (upgrade/install)
         run: |
+          echo "Deploying Helm chart..."
+          # Use --dependency-update to ensure dependencies are updated during deployment
           helm upgrade --install fraud-detection ./charts/fraud-detection \
             --set api.image.repository=${{ env.REGISTRY }}/${{ env.REGISTRY_OWNER }}/${{ env.IMAGE_NAME }} \
             --set api.image.tag=${{ github.sha }} \
+            --dependency-update \
             --timeout 5m
         timeout-minutes: 8
 

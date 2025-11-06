@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Values.worker.name }}
+  name: {{ include "fraud-detection.fullname" . }}-worker
   labels:
     app: fraud-detection
     component: xai-worker
@@ -30,7 +30,7 @@ spec:
               key: DATABASE_URL
         # Updated to use Redis with Sentinel for HA
         - name: CELERY_BROKER_URL
-          value: "sentinel://{{ .Release.Name }}-redis-master:26379/0"
+          value: "sentinel://{{ include "fraud-detection.fullname" . }}-redis-master:26379/0"
         - name: OTEL_SERVICE_NAME
           value: "xai-worker"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT

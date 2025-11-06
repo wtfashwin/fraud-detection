@@ -10,11 +10,11 @@ appVersion: "1.0.0"
 
 dependencies:
   - name: redis
-    version: "~17.0.0"
+    version: "17.15.4"
     repository: "https://charts.bitnami.com/bitnami"
   - name: postgresql
-    version: "~12.0.0"
+    version: "12.11.0"
     repository: "https://charts.bitnami.com/bitnami"
   - name: mlflow
-    version: "~0.7.0"
+    version: "0.9.0"
     repository: "https://community-charts.github.io/helm-charts"

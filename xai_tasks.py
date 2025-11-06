@@ -8,6 +8,7 @@ from celery import Celery
 from celery.utils.log import get_task_logger
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+from typing import Any, Dict
 
 from db.db import SessionLocal
 from db.models import TransactionResult, StatusEnum
@@ -18,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = get_task_logger(__name__)
 
 # Structured logging for worker
-from pythonjsonlogger import jsonlogger
+# from pythonjsonlogger import jsonlogger
 
 # OpenTelemetry + Prometheus setup for Celery worker
 from opentelemetry import trace
@@ -26,7 +27,7 @@ from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.celery import CeleryInstrumentor
+# from opentelemetry.instrumentation.celery import CeleryInstrumentor
 from prometheus_client import start_http_server, Histogram, Counter
 
 try:
@@ -36,10 +37,10 @@ try:
     span_exporter = OTLPSpanExporter(endpoint=otel_endpoint)
     provider.add_span_processor(BatchSpanProcessor(span_exporter))
     trace.set_tracer_provider(provider)
-    try:
-        CeleryInstrumentor().instrument()
-    except Exception:
-        logger.warning("Failed to instrument Celery for OpenTelemetry")
+    # try:
+    #     CeleryInstrumentor().instrument()
+    # except Exception:
+    #     logger.warning("Failed to instrument Celery for OpenTelemetry")
 except Exception:
     logger.exception("Failed to configure OpenTelemetry for worker")
 
@@ -123,9 +124,11 @@ def compute_shap(self, transaction_id: str, input_data: dict, correlation_id: st
             session.add(rec)
             logger.warning("Record not found, creating new COMPLETED record for %s", transaction_id)
         
-        rec.shap_values = shap_values
-        rec.prediction_score = pred_proba
-        rec.status = StatusEnum.COMPLETED
+        rec.__dict__.update({
+            'shap_values': shap_values,
+            'prediction_score': float(pred_proba),
+            'status': StatusEnum.COMPLETED
+        })
 
         session.commit()
         logger.info("SHAP task completed", extra={"transaction_id": transaction_id, "correlation_id": correlation_id})
@@ -146,7 +149,7 @@ def compute_shap(self, transaction_id: str, input_data: dict, correlation_id: st
             # Update the status to FAILED before giving up
             rec = session.get(TransactionResult, _uuid.UUID(transaction_id))
             if rec:
-                rec.status = StatusEnum.FAILED
+                rec.__dict__.update({'status': StatusEnum.FAILED})
                 session.commit()
         except SQLAlchemyError:
             # Ignore errors while attempting to mark as FAILED

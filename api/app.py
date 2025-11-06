@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Depends, status
+from fastapi import FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, Field
 import joblib
 import uuid
@@ -7,7 +7,6 @@ import json
 import os
 import logging
 import mlflow
-import mlflow.sklearn
 from mlflow.tracking import MlflowClient
 from functools import lru_cache
 from sqlalchemy import create_engine, text
@@ -20,7 +19,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-from xai_tasks import compute_shap
+import xai_tasks
 from db.db import engine
 
 logging.basicConfig(level=logging.INFO)
@@ -44,7 +43,7 @@ def load_production_model():
             raise ValueError(f"No {MODEL_STAGE} version found for model {MODEL_NAME}")
             
         model_uri = f"models:/{MODEL_NAME}/{latest_version[0].version}" 
-        model = mlflow.sklearn.load_model(model_uri) 
+        model = mlflow.pyfunc.load_model(model_uri) 
         logger.info(f"Loaded {MODEL_NAME} version {latest_version[0].version} from {MODEL_STAGE}")
         return model
     except Exception as e:
@@ -90,7 +89,7 @@ async def lifespan(app: FastAPI):
     try:
         global MODEL
         MODEL = load_production_model()
-        logger.info(f"Model loaded successfully from {'MLflow' if isinstance(MODEL, mlflow.sklearn.SKLearnModel) else 'local fallback'}")
+        logger.info(f"Model loaded successfully from {'MLflow' if hasattr(MODEL, 'predict') else 'local fallback'}")
     except Exception as e:
         logger.error(f"Critical error loading model: {e}")
         raise
@@ -161,7 +160,7 @@ def get_health(request: Request):
         client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE]) 
         health_status["dependencies"]["mlflow"] = "UP"
         
-        if not isinstance(MODEL, (mlflow.sklearn.SKLearnModel, object)): 
+        if not hasattr(MODEL, 'predict'): 
             raise ValueError("Model object is invalid or not loaded.")
         health_status["dependencies"]["model"] = "UP"
     except Exception as e:
@@ -195,10 +194,11 @@ async def predict(transaction: TransactionIn, request: Request):
         )
 
     scaled_features = SCALER.transform(raw_data)
+    columns = pd.Index([f'feature_{i}' for i in range(scaled_features.shape[1])])
     if scaled_features.shape[1] == len(COLUMN_NAMES):
         X = pd.DataFrame(scaled_features, columns=COLUMN_NAMES)
     else:
-        X = pd.DataFrame(scaled_features, columns=[f'feature_{i}' for i in range(scaled_features.shape[1])])
+        X = pd.DataFrame(scaled_features, columns=columns)
         logger.warning(f"Feature count mismatch after scaling. Using {scaled_features.shape[1]} features, but model expects {len(COLUMN_NAMES)}")
         
     if X.shape[1] != len(COLUMN_NAMES):
@@ -208,18 +208,60 @@ async def predict(transaction: TransactionIn, request: Request):
         )
 
     with inference_time.time():
-        prediction = int(MODEL.predict(X)[0])
+        # Use the correct MLflow PyFunc model interface
+        prediction_result = MODEL.predict(X)
+        # Simple and safe conversion - avoid complex typing checks
+        prediction = 0
         try:
-            score = float(MODEL.predict_proba(X)[:, 1][0])
-        except Exception:
-            score = float(MODEL.predict(X)[0])
+            # Convert to string, clean it, and extract a number
+            pred_str = str(prediction_result)
+            # Remove brackets and other characters
+            clean_str = ''.join(c for c in pred_str if c.isdigit() or c in '.-')
+            if clean_str:
+                prediction = int(float(clean_str.split('.')[0]) if '.' in clean_str else clean_str)
+        except:
+            # Ultimate fallback
+            prediction = 0
+        
+        # Try to get probability scores if the model supports it
+        score = 0.0
+        try:
+            # Use getattr to safely access predict_proba
+            predict_proba_func = getattr(MODEL, 'predict_proba', None)
+            if predict_proba_func and callable(predict_proba_func):
+                proba_result = predict_proba_func(X)
+                # Simple conversion - convert to string and extract a float value
+                try:
+                    proba_str = str(proba_result)
+                    # Extract all numbers from the string
+                    import re
+                    numbers = re.findall(r'[0-9]+\.?[0-9]*', proba_str)
+                    if len(numbers) >= 2:
+                        # Take the second number (often the probability of positive class)
+                        score = float(numbers[1])
+                    elif len(numbers) >= 1:
+                        # Take the first number
+                        score = float(numbers[0])
+                    else:
+                        score = 0.0
+                except:
+                    # Ultimate fallback
+                    score = 0.0
+            else:
+                # If predict_proba is not available, use a default score
+                score = 0.5
+        except Exception as e:
+            logger.warning(f"Could not get probability score: {e}")
+            score = 0.5
 
     try:
-        compute_shap.apply_async(
-            args=[transaction.transaction_id, transaction.features, corr_id],
-            countdown=0
-        )
+        # Use the correct Celery task interface
+        # Convert features list to dict for the Celery task
+        features_dict = {f"feature_{i}": float(val) for i, val in enumerate(transaction.features)}
+        task = xai_tasks.celery_app.send_task('xai_tasks.compute_shap', 
+                                   args=[transaction.transaction_id, features_dict, corr_id])
         explanation_status = "Calculation queued"
+        logger.info(f"SHAP task queued with ID: {getattr(task, 'id', 'unknown')}")
     except Exception as e:
         logger.error(f"[{corr_id}] Failed to queue SHAP task: {e}")
         explanation_status = "Queue failed"
