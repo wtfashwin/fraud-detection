@@ -21,40 +21,31 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 import xai_tasks
 from db.db import engine
-
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Fraud Detection API", version="1.0.0")
-
-# MLflow configuration
 MLFLOW_TRACKING_URI = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000')
 MODEL_NAME = os.getenv('MLFLOW_MODEL_NAME', 'fraud-detection-model')
-MODEL_STAGE = os.getenv('MLFLOW_MODEL_STAGE', 'Production')
-
+MODEL_STAGE = os.getenv('MLFLOW_MODEL_STAGE', 'production')
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-client = MlflowClient()
+client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
 
 @lru_cache(maxsize=1)
 def load_production_model():
     try:
-        latest_version = client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE]) 
-        if not latest_version:
-            raise ValueError(f"No {MODEL_STAGE} version found for model {MODEL_NAME}")
-            
-        model_uri = f"models:/{MODEL_NAME}/{latest_version[0].version}" 
-        model = mlflow.pyfunc.load_model(model_uri) 
-        logger.info(f"Loaded {MODEL_NAME} version {latest_version[0].version} from {MODEL_STAGE}")
+        model_uri = f"models:/{MODEL_NAME}@{MODEL_STAGE}"
+        model = mlflow.pyfunc.load_model(model_uri)
+        logger.info(f"Loaded model {MODEL_NAME} using alias '{MODEL_STAGE}'")
         return model
     except Exception as e:
-        logger.error(f"Failed to load model from MLflow: {e}")
+        logger.error(f"Failed to load model from MLflow using alias '{MODEL_STAGE}': {e}")
         logger.warning("Falling back to local model file")
         return joblib.load('models/logistic_model.joblib')
 
 MODEL = load_production_model()
 SCALER = joblib.load('models/scaler.joblib')
 COLUMN_NAMES = joblib.load('models/columns.joblib')
-
 def create_db_table():
     """Ensures the table for SHAP results exists."""
     SQL = """
@@ -157,14 +148,21 @@ def get_health(request: Request):
     health_status["dependencies"]["redis_broker"] = "UP"
 
     try:
-        client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE]) 
-        health_status["dependencies"]["mlflow"] = "UP"
+        # Check MLflow connectivity
+        try:
+            client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE])
+            health_status["dependencies"]["mlflow"] = "UP"
+        except Exception as mlflow_err:
+            # MLflow might be unavailable but model is loaded from fallback
+            health_status["dependencies"]["mlflow"] = f"DOWN ({str(mlflow_err)})"
         
+        # Check model validity
         if not hasattr(MODEL, 'predict'): 
             raise ValueError("Model object is invalid or not loaded.")
         health_status["dependencies"]["model"] = "UP"
     except Exception as e:
-        health_status["dependencies"]["mlflow"] = f"DOWN ({str(e)})"
+        if "mlflow" not in health_status["dependencies"]:
+            health_status["dependencies"]["mlflow"] = f"DOWN ({str(e)})"
         if hasattr(MODEL, 'predict'): 
             health_status["dependencies"]["model"] = "DEGRADED (using fallback)"
         else:

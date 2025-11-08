@@ -1,3 +1,4 @@
+import warnings
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -6,6 +7,10 @@ from imblearn.over_sampling import SMOTE
 import joblib
 import json
 import os
+
+# Suppress non-critical warnings
+warnings.filterwarnings('ignore', category=FutureWarning, module='sklearn')
+warnings.filterwarnings('ignore', category=DeprecationWarning)
 
 DATA_PATH = 'data/creditcard.csv'
 PROCESSED_DATA_PATH = 'data/preprocessed_data.npz'

@@ -19,7 +19,6 @@ class FraudDetector:
         else:
             raise ValueError("Input data must be dict or pandas DataFrame")
 
-        # Filter only required features in correct order
         input_df = input_df[self.features]
 
         # Scale input features

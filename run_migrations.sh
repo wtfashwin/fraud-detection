@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run Alembic migrations before starting the app.
-# Usage: the container's ENTRYPOINT runs this script, then execs the CMD.
-
 export DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://postgres:postgres@postgres:5432/fraud}
 
 if command -v alembic >/dev/null 2>&1; then
@@ -13,5 +10,4 @@ else
   echo "alembic not found in PATH; skipping migrations"
 fi
 
-# Exec the passed command (gunicorn/celery)
 exec "$@"

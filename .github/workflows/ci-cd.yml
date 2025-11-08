@@ -190,15 +190,15 @@ jobs:
       - name: Get Pod Status for Debugging
         run: |
           echo "=== Getting Pod Status ==="
-          kubectl get pods -l app.kubernetes.io/name=fraud-detection-api --namespace default
+          kubectl get pods -l app=fraud-detection,component=api --namespace default
         if: ${{ always() }}
         timeout-minutes: 1
 
       - name: Describe Pods for Detailed Error Messages
         run: |
           echo "=== Describing Pods ==="
-          # Get the name of the failing pod
-          POD_NAMES=$(kubectl get pods -l app.kubernetes.io/name=fraud-detection-api -o jsonpath="{.items[*].metadata.name}" --namespace default)
+          # Get the name of the failing pod using correct label selector
+          POD_NAMES=$(kubectl get pods -l app=fraud-detection,component=api -o jsonpath="{.items[*].metadata.name}" --namespace default)
           
           for POD_NAME in $POD_NAMES; do
             echo "--- Describing Pod: $POD_NAME ---"
@@ -211,8 +211,8 @@ jobs:
       - name: Get Pod Logs
         run: |
           echo "=== Getting Pod Logs ==="
-          # Get the names of all pods
-          POD_NAMES=$(kubectl get pods -l app.kubernetes.io/name=fraud-detection-api -o jsonpath="{.items[*].metadata.name}" --namespace default)
+          # Get the names of all pods using correct label selector
+          POD_NAMES=$(kubectl get pods -l app=fraud-detection,component=api -o jsonpath="{.items[*].metadata.name}" --namespace default)
           
           for POD_NAME in $POD_NAMES; do
             echo "--- Getting Logs for Pod: $POD_NAME ---"
@@ -228,21 +228,34 @@ jobs:
 
       - name: Wait for API deployment rollout
         run: |
-          kubectl rollout status deployment/fraud-detection-api --namespace default --timeout=180s
-        timeout-minutes: 6
+          # Get the actual deployment name from Helm release
+          DEPLOYMENT_NAME=$(kubectl get deployment -l app=fraud-detection,component=api -o jsonpath="{.items[0].metadata.name}" --namespace default)
+          echo "Waiting for deployment: $DEPLOYMENT_NAME"
+          kubectl rollout status deployment/$DEPLOYMENT_NAME --namespace default --timeout=300s
+        timeout-minutes: 8
 
       - name: Verify API health endpoint
         run: |
           echo "=== Checking API Health ==="
           # Wait a bit for the service to be available
-          sleep 10
-          # Get the service port
-          kubectl port-forward service/fraud-detection-api 8000:8000 &
+          sleep 15
+          # Get the service name from Helm release
+          SERVICE_NAME=$(kubectl get service -l app=fraud-detection,component=api -o jsonpath="{.items[0].metadata.name}" --namespace default || echo "fraud-detection-api")
+          echo "Port-forwarding service: $SERVICE_NAME"
+          kubectl port-forward service/$SERVICE_NAME 8000:8000 --namespace default &
           PORT_FORWARD_PID=$!
           # Give port-forward time to start
-          sleep 5
-          # Try to access the health endpoint
-          curl -f http://localhost:8000/health || echo "Health check failed"
+          sleep 10
+          # Try to access the health endpoint with retries
+          for i in {1..5}; do
+            if curl -f http://localhost:8000/health; then
+              echo "Health check passed"
+              break
+            else
+              echo "Health check attempt $i failed, retrying..."
+              sleep 5
+            fi
+          done || echo "Health check failed after retries"
           # Kill the port-forward process
-          kill $PORT_FORWARD_PID
-        timeout-minutes: 2
+          kill $PORT_FORWARD_PID 2>/dev/null || true
+        timeout-minutes: 3

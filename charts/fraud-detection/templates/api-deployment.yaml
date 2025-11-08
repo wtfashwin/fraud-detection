@@ -21,6 +21,8 @@ spec:
       labels:
         app: fraud-detection
         component: api
+        app.kubernetes.io/name: fraud-detection
+        app.kubernetes.io/component: api
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/path: /metrics
@@ -54,14 +56,18 @@ spec:
           httpGet:
             path: /health
             port: 8000
-          initialDelaySeconds: 30
+          initialDelaySeconds: 60
+          periodSeconds: 10
           timeoutSeconds: 5
+          failureThreshold: 6
         livenessProbe:
           httpGet:
             path: /status
             port: 8000
-          initialDelaySeconds: 15
+          initialDelaySeconds: 90
           periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 3
         lifecycle:
           preStop:
             exec:

@@ -1,3 +1,4 @@
+import warnings
 import numpy as np
 import joblib
 import matplotlib
@@ -8,6 +9,11 @@ from sklearn.metrics import (
     confusion_matrix, classification_report,
     roc_curve, auc
 )
+
+# Suppress non-critical warnings
+warnings.filterwarnings('ignore', category=FutureWarning, module='sklearn')
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
 
 # Load data and model
 print("📥 Loading model and test data...")
