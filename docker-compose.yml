@@ -4,7 +4,7 @@ x-app: &app
   build:
     context: .
   environment: &app-env
-    DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-fraud}:${POSTGRES_PASSWORD:-fraud-local-only}@postgres:5432/${POSTGRES_DB:-fraud}
+    DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:?Set POSTGRES_USER in the environment file}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the environment file}@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in the environment file}
     CELERY_BROKER_URL: redis://redis:6379/0
     MODEL_DIR: /app/models
   restart: unless-stopped
@@ -14,9 +14,9 @@ services:
   postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-fraud}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraud-local-only}
-      POSTGRES_DB: ${POSTGRES_DB:-fraud}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in the environment file}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the environment file}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in the environment file}
     volumes: [postgres_data:/var/lib/postgresql/data]
     networks: [internal]
     healthcheck:

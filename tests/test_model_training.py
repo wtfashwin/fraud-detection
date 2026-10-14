@@ -168,3 +168,20 @@ def test_training_output_does_not_follow_serving_model_dir(tmp_path, monkeypatch
     main()
     assert {p.name for p in serving.iterdir()} == {"keep.txt"}
     assert (tmp_path / "models/trained/xgb_model.joblib").is_file()
+
+
+def test_training_records_xgboost_version_without_standard_distribution_metadata(monkeypatch):
+    """Linux xgboost-cpu exposes xgboost but has no xgboost distribution metadata."""
+    from importlib.metadata import PackageNotFoundError
+    import train_model
+    import xgboost
+    installed_version = train_model.version
+
+    def cpu_wheel_metadata(package):
+        if package == "xgboost":
+            raise PackageNotFoundError(package)
+        return installed_version(package)
+
+    monkeypatch.setattr(train_model, "version", cpu_wheel_metadata)
+    result = train_model.train_and_evaluate(fixture_data(), n_splits=3, n_estimators=2)
+    assert result["metrics"]["package_versions"]["xgboost"] == xgboost.__version__

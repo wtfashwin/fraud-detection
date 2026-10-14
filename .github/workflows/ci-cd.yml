@@ -73,6 +73,12 @@ jobs:
         run: docker compose --env-file .env.example up --build -d --wait --wait-timeout 120
       - name: Prediction and asynchronous explanation smoke
         run: python3 scripts/smoke_test.py --url http://127.0.0.1:8000
+      - name: Build optional CPU training image
+        run: docker build --target training -t fraud-training:ci .
+      - name: Check optional training image dependencies
+        run: >-
+          docker run --rm --entrypoint python fraud-training:ci
+          -c "import mlflow, shap, xgboost; from api.inference import load_bundle; assert load_bundle().score([0.0] * 30)[0] in (0, 1); print(xgboost.__version__)"
       - name: Logs on failure
         if: failure()
         run: docker compose --env-file .env.example logs --tail 100

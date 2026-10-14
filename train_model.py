@@ -11,7 +11,7 @@ import pandas as pd
 from imblearn.pipeline import Pipeline
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import StandardScaler
-from xgboost import XGBClassifier
+from xgboost import XGBClassifier, __version__ as xgboost_version
 
 from preprocess import FEATURE_NAMES, make_smote, validate_dataset
 
@@ -58,7 +58,8 @@ def train_and_evaluate(frame, n_splits=5, random_state=42, n_estimators=100, thr
         "model_parameters": {key: pipeline.named_steps["model"].get_params()[key] for key in
                              ("n_estimators", "learning_rate", "max_depth", "n_jobs", "scale_pos_weight")},
         "package_versions": {name: version(name) for name in
-                             ("numpy", "pandas", "scikit-learn", "imbalanced-learn", "xgboost")},
+                             ("numpy", "pandas", "scikit-learn", "imbalanced-learn")}
+                            | {"xgboost": xgboost_version},
     })
     return {"pipeline": pipeline, "metrics": metrics, "features": FEATURE_NAMES.copy(),
             "input_example": X_test.iloc[:5].copy()}
