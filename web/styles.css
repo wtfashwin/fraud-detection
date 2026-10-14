@@ -1,0 +1,70 @@
+:root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #192d46; background: #f1f5f9; font-synthesis: none; line-height: 1.5; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+[hidden] { display: none !important; }
+a { color: #185a79; text-underline-offset: 3px; }
+button, input, textarea { font: inherit; }
+button { cursor: pointer; border: 1px solid transparent; border-radius: 6px; padding: .65rem 1rem; font-weight: 600; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+:focus-visible { outline: 3px solid #007e97; outline-offset: 4px; }
+.skip-link { position: fixed; left: 1rem; top: -5rem; padding: .7rem; z-index: 3; background: white; }
+.skip-link:focus { top: 1rem; }
+.site-header { background: #192d46; color: white; padding: 1.25rem max(1.5rem, calc((100vw - 1160px) / 2)); display: flex; gap: 1rem; align-items: center; justify-content: space-between; }
+.site-header a { color: white; }
+.brand { text-decoration: none; font-size: 1.1rem; font-weight: 700; }
+.brand span { font-size: .875rem; font-weight: 400; color: #cad7e5; margin-left: .75rem; }
+.site-header > a:last-child { font-size: .875rem; }
+main { max-width: 1208px; margin: 0 auto; padding: 2.8rem 1.5rem 1.5rem; }
+.intro { display: flex; justify-content: space-between; gap: 2rem; align-items: flex-start; margin-bottom: 2rem; }
+h1 { margin: 0 0 .5rem; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -.04em; line-height: 1.15; }
+h2 { font-size: 1.15rem; margin: 0; }
+h3 { font-size: 1.05rem; }
+p { max-width: 72ch; }
+.intro p { margin: .65rem 0 0; color: #4a6077; }
+.demo-label { white-space: nowrap; border: 1px solid #c5d3df; padding: .35rem .6rem; font-size: .8rem; border-radius: 4px; margin-top: .35rem; }
+.connection { background: #e5eef3; border: 1px solid #c5d3df; padding: 1.25rem 1.5rem; border-radius: 8px; margin-bottom: 1.5rem; }
+.connection-heading, .panel-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .8rem; }
+#connection-status { font-size: .875rem; }
+#connection-status[data-state="ready"] { color: #136052; }
+#connection-status[data-state="failed"] { color: #a32932; }
+.connection-controls { display: flex; gap: 1rem; align-items: center; margin-top: .8rem; }
+.api-field { flex: 1; }
+label { display: block; font-weight: 600; font-size: .875rem; margin-bottom: .4rem; }
+label span { color: #55697b; font-weight: 400; }
+input, textarea { display: block; width: 100%; border: 1px solid #a7b8c8; border-radius: 5px; background: white; color: #192d46; padding: .7rem .8rem; }
+input::placeholder, textarea::placeholder { color: #677787; opacity: 1; }
+textarea { resize: vertical; min-height: 180px; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: .9rem; line-height: 1.65; }
+.help { color: #55697b; font-size: .82rem; margin: .4rem 0 .9rem; }
+.connection .help { margin-bottom: 0; }
+.workbench { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: start; gap: 1.5rem; }
+.input-panel, .result-panel { background: white; border: 1px solid #d1dce5; border-radius: 8px; padding: 1.5rem; min-width: 0; }
+.panel-heading { margin-bottom: 1.3rem; }
+.primary { background: #185a79; color: white; width: 100%; margin-top: 1.1rem; }
+.primary:hover:enabled { background: #134860; }
+.secondary { background: white; border-color: #a7b8c8; color: #192d46; }
+.secondary:hover:enabled { background: #f1f5f9; }
+.text-button { padding: 0; color: #185a79; background: transparent; font-size: .85rem; text-decoration: underline; text-underline-offset: 3px; }
+.notice { padding: .8rem 1rem; border-left: 3px solid #a67621; background: #fff7e7; color: #654b1f; font-size: .85rem; }
+.error { color: #96222e; background: #fff0f0; border-left: 3px solid #b92f3f; padding: .75rem 1rem; font-size: .875rem; overflow-wrap: anywhere; }
+details { margin-top: 1.2rem; }
+summary { cursor: pointer; font-weight: 600; font-size: .875rem; }
+.feature-guide { padding: .8rem 1rem; border: 1px solid #d1dce5; border-radius: 5px; }
+#feature-order { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 1.5rem; row-gap: .2rem; padding-left: 1.5rem; margin-bottom: 0; color: #4a6077; font-size: .8rem; }
+.empty { text-align: center; color: #55697b; padding: 3.5rem 1rem; }
+.empty-symbol { font-size: 3rem; color: #7a90a4; }
+.empty h3 { color: #192d46; margin-bottom: .5rem; }
+.empty p { margin: 0; }
+.prediction { display: inline-block; background: #e6f3f0; color: #136052; padding: .4rem .7rem; border-radius: 4px; font-size: .9rem; font-weight: 600; margin-top: 1.5rem; }
+.prediction[data-fraud="true"] { color: #96222e; background: #fff0f0; }
+.score-label { color: #55697b; margin: 1.5rem 0 .25rem; font-size: .9rem; }
+.probability { font-size: clamp(1.75rem, 3vw, 2.8rem); line-height: 1.2; letter-spacing: -.035em; font-weight: 650; margin: 0 0 1rem; overflow-wrap: anywhere; }
+.interpretation { font-size: .85rem; color: #55697b; }
+.result-details { border-top: 1px solid #d1dce5; margin-top: 1.5rem; padding-top: 1rem; }
+dt { color: #55697b; font-size: .8rem; margin-top: .8rem; }
+dd { margin: .2rem 0 0; overflow-wrap: anywhere; font-size: .875rem; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f1f5f9; border-radius: 4px; padding: 1rem; font-size: .8rem; max-height: 420px; overflow: auto; }
+.explanation { border-top: 1px solid #d1dce5; margin-top: 1.4rem; padding-top: .3rem; }
+#explanation-message { font-size: .875rem; overflow-wrap: anywhere; }
+footer { color: #55697b; font-size: .8rem; margin-top: 1.5rem; }
+@media (max-width: 760px) { .workbench { grid-template-columns: 1fr; } .intro { display: block; } .demo-label { display: inline-block; margin-top: 1rem; } main { padding-top: 1.8rem; } }
+@media (max-width: 480px) { .site-header { padding: 1rem; align-items: flex-start; } .brand span { display: block; margin-left: 0; } .site-header > a:last-child { max-width: 7rem; text-align: right; } main { padding-left: 1rem; padding-right: 1rem; } .connection, .input-panel, .result-panel { padding: 1rem; } .connection-controls { flex-direction: column; align-items: stretch; } #feature-order { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

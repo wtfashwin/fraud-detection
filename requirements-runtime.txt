@@ -1,0 +1,15 @@
+fastapi==0.121.0
+uvicorn[standard]==0.22.0
+gunicorn==23.0.0
+celery[redis]==5.5.3
+redis==4.5.4
+SQLAlchemy==2.0.44
+psycopg2-binary==2.9.11
+alembic==1.17.0
+pydantic==2.12.4
+joblib==1.5.2
+scikit-learn==1.6.1
+pandas==2.3.3
+numpy==2.3.4
+prometheus-fastapi-instrumentator==7.1.0
+prometheus-client==0.22.1

@@ -1,96 +1,75 @@
+# API and worker always use the same artifact. Select an explicitly built tag.
+image:
+  repository: ghcr.io/wtfashwin/fraud-api
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+modelDir: /app/models
 api:
-  name: fraud-api
-  image:
-    repository: fraud-api
-    tag: latest
-    pullPolicy: IfNotPresent
-  replicaCount: 2
+  # A single migration owner is the baseline; entrypoint runs Alembic before API.
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 8000
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
+      memory: 256Mi
     limits:
       cpu: 1000m
       memory: 1Gi
   rollingUpdate:
     maxSurge: 1
     maxUnavailable: 0
-
 worker:
-  name: xai-worker
-  image:
-    repository: fraud-api  
-    tag: latest
-    pullPolicy: IfNotPresent
-  maxReplicas: 10
+  replicaCount: 1
+  concurrency: 1
   resources:
     requests:
       cpu: 100m
       memory: 256Mi
     limits:
-      cpu: 500m
-      memory: 512Mi
-
+      cpu: 1000m
+      memory: 1Gi
+  autoscaling:
+    # Requires an installed KEDA operator and ScaledObject CRD.
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    queueLength: "5"
 redis:
-  architecture: replication
+  architecture: standalone
   auth:
+    enabled: false
+  sentinel:
     enabled: false
   master:
     persistence:
       enabled: true
       size: 1Gi
-  replica:
-    persistence:
-      enabled: true
-      size: 1Gi
-  sentinel:
-    enabled: true
-    masterSet: mymaster
-    initialCheckTimeout: 5
-    quorum: 2
-    downAfterMilliseconds: 5000
-    failoverTimeout: 10000
-    parallelSyncs: 1
-
 postgresql:
   auth:
-    username: postgres
-    password: postgres
+    username: fraud
+    # Supply your own password via a private values file; never commit it.
+    password: ""
     database: fraud
   primary:
     persistence:
       enabled: true
       size: 1Gi
-
+mlflowEnabled: false
 mlflow:
+  # Optional tracking server only; this chart does not publish/register a model.
+  # Configure durable backend/artifact storage before relying on its history.
   backendStore:
-    databaseMigration: true
-    databaseConnectionCheck: true
+    databaseMigration: false
+    databaseConnectionCheck: false
     postgres:
-      enabled: true
-      host: "fraud-detection-postgresql"
-      port: 5432
-      database: "mlflow"
-      user: "postgres"
-      password: "postgres"
-      driver: "psycopg2"
-  artifactRoot:
-    proxiedArtifactStorage: false
-    s3:
       enabled: false
-    azureBlob:
-      enabled: false
-    gcs:
-      enabled: false
-
 monitoring:
+  # Adds Prometheus scrape annotations; no collector/dashboard is installed.
   enabled: true
-  prometheus:
-    scrapeInterval: 15s
-  grafana:
-    enabled: true
-    dashboardsEnabled: true
-
 otel:
-  enabled: true
-  endpoint: "http://otel-collector:4318/v1/traces"
+  # An externally supplied collector is required when enabled.
+  enabled: false
+  endpoint: ""

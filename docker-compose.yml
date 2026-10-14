@@ -1,185 +1,85 @@
+name: fraud-detection
+x-app: &app
+  image: ${FRAUD_IMAGE:-fraud-api:local}
+  build:
+    context: .
+  environment: &app-env
+    DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    CELERY_BROKER_URL: redis://redis:6379/0
+    MODEL_DIR: /app/models
+  restart: unless-stopped
+  init: true
+  networks: [internal]
 services:
-  # --- DATABASE SERVICES ---
-  # Redis with Sentinel for high availability
-  redis-master:
-    image: redis:6-alpine
-    command: redis-server --appendonly yes
-    restart: always
-    networks:
-      - internal
-
-  redis-slave:
-    image: redis:6-alpine
-    command: redis-server --slaveof redis-master 6379
-    restart: always
-    depends_on:
-      - redis-master
-    networks:
-      - internal
-
-  redis-sentinel:
-    image: redis:6-alpine
-    command: >
-      bash -c "
-        echo 'port 26379' > sentinel.conf &&
-        echo 'sentinel monitor mymaster redis-master 6379 2' >> sentinel.conf &&
-        echo 'sentinel down-after-milliseconds mymaster 5000' >> sentinel.conf &&
-        echo 'sentinel failover-timeout mymaster 10000' >> sentinel.conf &&
-        echo 'sentinel parallel-syncs mymaster 1' >> sentinel.conf &&
-        redis-sentinel sentinel.conf
-      "
-    restart: always
-    depends_on:
-      - redis-master
-      - redis-slave
-    networks:
-      - internal
-
   postgres:
     image: postgres:15-alpine
-    restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-fraud}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - internal
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    networks: [internal]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
-    depends_on:
-      # Note: postgres depends on mlflow-db starting first
-      - mlflow-db 
-      
-  # --- MLFLOW TRACKING DB ---
-  mlflow-db:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: mlflow
-      POSTGRES_PASSWORD: mlflow_secret
-      POSTGRES_DB: mlflow_tracking
-    volumes:
-      - mlflow_db_data:/var/lib/postgresql/data
-    networks:
-      - internal
-
-  # --- APPLICATION SERVICES ---
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, 'yes']
+    volumes: [redis_data:/data]
+    networks: [internal]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 12
   api:
-    build: .
-    entrypoint: ["sh", "-c", "/app/run_migrations.sh && exec gunicorn -k uvicorn.workers.UvicornWorker api.app:app --bind 0.0.0.0:8000 --workers 2"]
-    environment:
-      # Updated to use Redis Sentinel
-      CELERY_BROKER_URL: sentinel://redis-master:26379/0
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-fraud}
+    <<: *app
     depends_on:
-      redis-sentinel:
-        condition: service_started
+      redis:
+        condition: service_healthy
       postgres:
         condition: service_healthy
-    ports:
-      - "8000:8000"
-    volumes:
-      - .:/app:ro 
-    networks:
-      - internal
+    ports: ['127.0.0.1:${API_PORT:-8000}:8000']
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/status || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-  
+      test: [CMD, python, -c, 'import urllib.request; urllib.request.urlopen("http://localhost:8000/ready", timeout=3)']
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 30s
   xai-worker:
-    build: .
-    entrypoint: ["sh", "-c", "celery -A xai_tasks.celery_app worker --loglevel=info --concurrency=1"]
+    <<: *app
+    command: [celery, -A, api.worker.app, worker, --loglevel=info, --concurrency=1]
     environment:
-      # Updated to use Redis Sentinel
-      CELERY_BROKER_URL: sentinel://redis-master:26379/0
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-fraud}
+      <<: *app-env
+      RUN_MIGRATIONS: '0'
     depends_on:
-      redis-sentinel:
-        condition: service_started
-      postgres:
+      api:
         condition: service_healthy
-    volumes:
-      - .:/app
-    networks:
-      - internal
-
-  # --- MLOPS TOOLS ---
-  mlflow:
-    build: . 
-    restart: always
-    entrypoint: ["sh", "-c", "mlflow server --backend-store-uri postgresql://mlflow:mlflow_secret@mlflow-db:5432/mlflow_tracking --default-artifact-root /mlflow/mlruns -h 0.0.0.0"]
-    environment:
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-    ports:
-      - "5000:5000"
-    volumes:
-      - ./mlruns:/mlflow/mlruns
-      - .:/app
-    depends_on:
-      - mlflow-db
-    networks:
-      - internal
-
-  # --- OBSERVABILITY STACK ---
-  prometheus: 
-    image: prom/prometheus:latest
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    command: ["--config.file=/etc/prometheus/prometheus.yml"]
-    ports:
-      - "9090:9090"
-    networks:
-      - internal
-    
+    healthcheck:
+      test: [CMD-SHELL, 'celery -A api.worker.app inspect ping --destination "celery@$$HOSTNAME" --timeout 3 | python -c "import sys; sys.exit(0 if ''pong'' in sys.stdin.read() else 1)"']
+      interval: 15s
+      timeout: 8s
+      retries: 4
+      start_period: 20s
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: [monitoring]
+    volumes: [./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro]
+    ports: ['127.0.0.1:9090:9090']
+    networks: [internal]
   grafana:
-    image: grafana/grafana:9.5.0
+    image: grafana/grafana:11.3.0
+    profiles: [monitoring]
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-    volumes:
-      # Ensure you have the dashboard JSON file in the correct monitoring path
-      - ./monitoring/grafana_dashboard.json:/var/lib/grafana/dashboards/fraud_dashboard.json:ro
-      - ./monitoring/grafana_provisioning/:/etc/grafana/provisioning/datasources/
-    ports:
-      - "3000:3000"
-    networks:
-      - internal
-    depends_on:
-      - prometheus
-      
-  jaeger:
-    image: jaegertracing/all-in-one:1.46
-    environment:
-      COLLECTOR_ZIPKIN_HTTP_PORT: 9411
-    ports:
-      - "16686:16686"   # Jaeger UI
-      - "14268:14268"   # Jaeger collector HTTP
-    networks:
-      - internal
-      
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.81.0
-    command: ["--config", "/etc/otel-collector-config.yaml"]
-    volumes:
-      - ./monitoring/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
-    ports:
-      - "4317:4317" 
-    depends_on:
-      - jaeger
-      - prometheus
-    networks:
-      - internal
-
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-local-demo-change-me}
+    volumes: [./monitoring/grafana_dashboard.json:/var/lib/grafana/dashboards/fraud_dashboard.json:ro]
+    ports: ['127.0.0.1:3000:3000']
+    networks: [internal]
 volumes:
   postgres_data:
-  mlflow_db_data:
-
+  redis_data:
 networks:
   internal:
     driver: bridge
