@@ -60,7 +60,7 @@ def compute_shap(self, transaction_id: str, features: list, correlation_id: str 
             values, base_value, method = bundle.explain(features)
             with engine.begin() as connection:
                 connection.execute(update(Explanation).where(Explanation.transaction_id == transaction_id)
-                                   .values(status="COMPLETED", shap_values=values, feature_names=bundle.columns,
+                                   .values(status="COMPLETED", shap_values=values, feature_names=bundle.explanation_columns,
                                            base_value=base_value, explanation_method=method))
         task_success.inc()
         return {"transaction_id": transaction_id, "status": "COMPLETED"}

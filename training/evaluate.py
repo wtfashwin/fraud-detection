@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -14,6 +13,7 @@ from sklearn.metrics import (
 
 
 from training import PROJECT_ROOT
+from api.inference import load_bundle
 
 
 def evaluate_predictions(labels, probabilities, threshold=0.5):
@@ -49,17 +49,26 @@ def main():
     source = Path(source_path)
     X_test, y_test = validate_dataset(pd.read_csv(source))
     directory = Path(os.getenv("MODEL_DIR", PROJECT_ROOT / "models"))
-    default_model = directory / ("xgb_model.joblib" if (directory / "xgb_model.joblib").exists() else "logistic_model.joblib")
-    model = joblib.load(os.getenv("MODEL_PATH", str(default_model)))
-    scaler = joblib.load(directory / "scaler.joblib")
-    features = joblib.load(directory / "columns.joblib")
-    if list(features) != list(X_test.columns):
+    bundle = load_bundle(directory)
+    if list(bundle.columns) != list(X_test.columns):
         raise ValueError("Saved model feature order does not match canonical evaluation schema")
-    scaled = scaler.transform(X_test if hasattr(scaler, "feature_names_in_") else X_test.to_numpy())
-    classes = list(model.classes_)
+    if bundle.raw_pipeline:
+        # A saved pipeline includes feature engineering and scaling exactly once.
+        model_input = X_test
+    else:
+        scaler_input = X_test if hasattr(bundle.scaler, "feature_names_in_") else X_test.to_numpy()
+        model_input = bundle.scaler.transform(scaler_input)
+        if hasattr(bundle.model, "feature_names_in_"):
+            model_input = pd.DataFrame(model_input, columns=bundle.columns, index=X_test.index)
+    classes = list(bundle.model.classes_)
     if 1 not in classes:
         raise ValueError("Model must provide fraud class 1")
-    probabilities = model.predict_proba(scaled)[:, classes.index(1)]
+    all_probabilities = np.asarray(bundle.model.predict_proba(model_input), dtype=float)
+    if all_probabilities.shape != (len(X_test), len(classes)) or not np.isfinite(all_probabilities).all():
+        raise ValueError("Model returned invalid evaluation probability shape or nonfinite values")
+    if np.any((all_probabilities < 0) | (all_probabilities > 1)) or not np.allclose(all_probabilities.sum(axis=1), 1.0):
+        raise ValueError("Model evaluation probabilities must be normalized values between 0 and 1")
+    probabilities = all_probabilities[:, classes.index(1)]
     metrics = evaluate_predictions(y_test, probabilities, float(os.getenv("DECISION_THRESHOLD", "0.5")))
     sidecar = source.with_suffix(".metadata.json")
     data_kind = json.loads(sidecar.read_text()).get("data_kind") if sidecar.exists() else None

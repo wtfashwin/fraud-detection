@@ -68,9 +68,8 @@ def test_training_writes_complete_isolated_bundle(tmp_path):
     from training.train import train_and_evaluate, save_bundle
     result = train_and_evaluate(fixture_data(), n_splits=3, n_estimators=2)
     save_bundle(result, tmp_path)
-    assert {p.name for p in tmp_path.iterdir()} == {
-        "xgb_model.joblib", "scaler.joblib", "columns.joblib", "feature_names.json", "metrics.json"
-    }
+    assert {"pipeline.joblib", "xgb_model.joblib", "scaler.joblib", "columns.joblib",
+            "feature_names.json", "metrics.json", "drift_baseline.json"} <= {p.name for p in tmp_path.iterdir()}
     assert joblib.load(tmp_path / "columns.joblib") == ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
     assert 0 <= result["metrics"]["average_precision"] <= 1
     assert result["metrics"]["test_rows"] == 24
@@ -205,3 +204,95 @@ def test_training_default_paths_do_not_depend_on_working_directory(tmp_path, mon
     train_module.main()
     assert (project / "models/trained/xgb_model.joblib").is_file()
     assert list(unrelated.iterdir()) == []
+
+
+def test_smote_limits_minority_generation_to_half_majority():
+    from training.preprocess import make_smote
+    labels = np.array([0] * 90 + [1] * 10)
+    features = np.arange(200, dtype=float).reshape(100, 2)
+    _, resampled = make_smote(labels).fit_resample(features, labels)
+    assert np.bincount(resampled).tolist() == [90, 45]
+
+
+def test_smote_skips_already_sufficient_minority_ratio():
+    from training.preprocess import make_smote
+    assert make_smote([0] * 6 + [1] * 4) == "passthrough"
+
+
+def test_bundle_contains_complete_raw_input_pipeline(tmp_path):
+    from training.train import save_bundle, train_and_evaluate
+    result = train_and_evaluate(fixture_data(), n_splits=5, n_estimators=2)
+    save_bundle(result, tmp_path)
+    restored = joblib.load(tmp_path / "pipeline.joblib")
+    assert "smote" not in restored.named_steps
+    np.testing.assert_allclose(restored.predict_proba(result["input_example"]),
+                               result["pipeline"].predict_proba(result["input_example"]))
+
+
+def test_optuna_selection_keeps_holdout_outside_all_trials(tmp_path):
+    from training.tune import tune_model
+    frame = fixture_data(160)
+    result, study = tune_model(frame, n_trials=2, n_estimators=2, max_majority=60,
+                               tracking_uri=(tmp_path / "mlruns").as_uri())
+    assert len(study.trials) == 2
+    assert result["metrics"]["test_rows"] == 32
+    assert result["metrics"]["cv_folds"] == 5
+    assert result["metrics"]["optimization_metric"] == "training_cv_roc_auc"
+    _, holdout = train_test_split(frame, test_size=0.2, random_state=42, stratify=frame.Class)
+    assert not set(result["training_indices"]) & set(holdout.index)
+    assert result["metrics"]["train_rows"] == 86  # 60 legitimate + all 26 fraud training rows.
+    assert 0.01 <= study.best_params["learning_rate"] <= 0.3
+    assert 3 <= study.best_params["max_depth"] <= 10
+    assert 1 <= study.best_params["scale_pos_weight"] <= 2
+    assert result["metrics"]["target_auc"] == 0.95
+    assert result["metrics"]["target_met"] is False  # Unidentified synthetic fixtures are not real quality proof.
+
+
+def test_optional_feature_engineering_is_fitted_only_on_fold_training_rows():
+    from training.train import fit_training_fold, train_and_evaluate
+    frame = fixture_data()
+    X, y = frame.drop(columns="Class"), frame.Class
+    pipeline = fit_training_fold(X.iloc[:80], y.iloc[:80], n_estimators=2, feature_engineering=True)
+    np.testing.assert_allclose(pipeline.named_steps["features"].pca_.mean_,
+                               X.iloc[:80][[f"V{i}" for i in range(1, 29)]].mean())
+    assert pipeline.named_steps["model"].n_features_in_ == 12
+    result = train_and_evaluate(frame, n_estimators=2, feature_engineering=True)
+    assert result["metrics"]["model_feature_names"] == ["Time", "logAmount"] + [f"PC{i}" for i in range(1, 11)]
+    assert result["features"] == ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
+
+
+def test_smoke_mlflow_registration_has_five_raw_csv_rows(tmp_path, monkeypatch):
+    import mlflow
+    from mlflow.tracking import MlflowClient
+    from training.train import log_to_mlflow, train_and_evaluate
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", (tmp_path / "mlruns").as_uri())
+    monkeypatch.setenv("MLFLOW_EXPERIMENT", "ci-smoke-unit-tests")
+    monkeypatch.setenv("MLFLOW_REGISTER_MODEL", "1")
+    monkeypatch.setenv("MLFLOW_REGISTRATION_MODE", "smoke")
+    monkeypatch.setenv("MLFLOW_MODEL_NAME", "ci-smoke-unit-model")
+    result = train_and_evaluate(fixture_data(), n_estimators=2, source_info={"data_kind": "synthetic"})
+    uri = log_to_mlflow(result)
+    info = mlflow.models.get_model_info(uri)
+    client = MlflowClient()
+    sample = pd.read_csv(client.download_artifacts(info.run_id, "inputs/sample.csv"))
+    assert sample.shape == (5, 30)
+    np.testing.assert_allclose(sample, result["input_example"])
+    registered = client.get_model_version("ci-smoke-unit-model", "1")
+    assert registered.tags["production_approved"] == "false"
+    assert registered.tags["data_kind"] == "synthetic"
+
+
+def test_smote_skips_when_integer_target_would_add_no_samples():
+    from training.preprocess import make_smote
+    assert make_smote([0] * 5 + [1] * 2) == "passthrough"
+
+
+def test_smoke_registration_cannot_use_production_namespace(tmp_path, monkeypatch):
+    from training.train import log_to_mlflow, train_and_evaluate
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", (tmp_path / "mlruns").as_uri())
+    monkeypatch.setenv("MLFLOW_REGISTER_MODEL", "1")
+    monkeypatch.setenv("MLFLOW_REGISTRATION_MODE", "smoke")
+    monkeypatch.setenv("MLFLOW_MODEL_NAME", "fraud-production")
+    result = train_and_evaluate(fixture_data(), n_estimators=2)
+    with pytest.raises(ValueError, match="ci-smoke"):
+        log_to_mlflow(result)

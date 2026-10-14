@@ -6,15 +6,24 @@ from pathlib import Path
 import numpy as np
 
 from training import PROJECT_ROOT
+from api.inference import InferenceBundle, load_bundle
 
 class FraudDetector:
-    def __init__(self, model_path, scaler_path, features_path):
-        self.model = joblib.load(model_path)
-        self.scaler = joblib.load(scaler_path)
-        with open(features_path, 'r') as f:
-            self.features = json.load(f)
+    def __init__(self, model_path=None, scaler_path=None, features_path=None, *, model_dir=None):
+        if model_path is None:
+            # The shared loader prefers the authoritative raw-input pipeline.
+            self.bundle = load_bundle(model_dir)
+        else:
+            if scaler_path is None or features_path is None:
+                raise ValueError("Legacy model loading requires scaler_path and features_path")
+            with open(features_path, "r") as stream:
+                features = json.load(stream)
+            self.bundle = InferenceBundle(joblib.load(model_path), joblib.load(scaler_path), features)
+        self.model = self.bundle.model
+        self.scaler = self.bundle.scaler
+        self.features = list(self.bundle.columns)
 
-    def _validate_and_prepare_input(self, input_data):
+    def _validate_raw_input(self, input_data):
         # Accept input dict or dataframe
         if isinstance(input_data, dict):
             input_df = pd.DataFrame([input_data])
@@ -39,27 +48,15 @@ class FraudDetector:
             raise ValueError("Input features must be numeric") from exc
         if not np.isfinite(input_df.to_numpy()).all():
             raise ValueError("Input features must contain only finite values")
-        scaler_input = input_df if hasattr(self.scaler, "feature_names_in_") else input_df.to_numpy()
-        features_scaled = self.scaler.transform(scaler_input)
-        return features_scaled
+        return input_df
 
     def predict(self, input_data):
-        features_scaled = self._validate_and_prepare_input(input_data)
-        pred = self.model.predict(features_scaled)
-        classes = list(self.model.classes_)
-        if 1 not in classes:
-            raise ValueError("Model must provide fraud class 1")
-        prob = self.model.predict_proba(features_scaled)[:, classes.index(1)]
-        return int(pred[0]), float(prob[0])
+        raw = self._validate_raw_input(input_data)
+        return self.bundle.score(raw.iloc[0].to_list())
 
 if __name__ == "__main__":
     BASE_DIR = Path(os.getenv("MODEL_DIR", PROJECT_ROOT / "models"))
-    model_name = "xgb_model.joblib" if (BASE_DIR / "xgb_model.joblib").is_file() else "logistic_model.joblib"
-    detector = FraudDetector(
-        model_path=os.getenv("MODEL_PATH", str(BASE_DIR / model_name)),
-        scaler_path=BASE_DIR / "scaler.joblib",
-        features_path=BASE_DIR / "feature_names.json"
-    )
+    detector = FraudDetector(model_dir=BASE_DIR)
 
     # Example input - fill all features exactly as in training data
     sample_input = {

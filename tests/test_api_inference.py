@@ -85,3 +85,34 @@ def test_registered_training_pipeline_skips_smote_during_explanation():
     reconstructed = 1 / (1 + np.exp(-(sum(values) + base_value)))
     assert reconstructed == pytest.approx(score)
     assert prediction == 1
+
+
+def test_complete_pipeline_bundle_preserves_raw_inputs_and_transformed_explanation_names(tmp_path):
+    import joblib
+    import pandas as pd
+    from sklearn.pipeline import Pipeline
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+    from training.features import FraudFeatureEngineer
+    from api.inference import load_bundle
+    from api.drift import create_baseline
+    from training.preprocess import FEATURE_NAMES
+    rng = np.random.default_rng(42)
+    raw = pd.DataFrame(rng.normal(size=(40, 30)), columns=FEATURE_NAMES)
+    raw["Amount"] = rng.uniform(0, 1000, size=40)
+    raw["Time"] = np.arange(40)
+    model = Pipeline([("features", FraudFeatureEngineer()), ("scaler", StandardScaler()),
+                      ("model", LogisticRegression(solver="liblinear"))]).fit(raw, [0, 1] * 20)
+    joblib.dump(model, tmp_path / "pipeline.joblib")
+    joblib.dump(FEATURE_NAMES, tmp_path / "columns.joblib")
+    import json
+    (tmp_path / "drift_baseline.json").write_text(json.dumps(create_baseline(raw, FEATURE_NAMES, source={"data_kind": "synthetic"})))
+    bundle = load_bundle(tmp_path)
+    assert bundle.raw_pipeline is True
+    assert bundle.columns == FEATURE_NAMES
+    assert bundle.explanation_columns == ["Time", "logAmount"] + [f"PC{i}" for i in range(1, 11)]
+    prediction, score = bundle.score(raw.iloc[0].tolist())
+    values, base_value, _ = bundle.explain(raw.iloc[0].tolist())
+    assert len(values) == len(bundle.explanation_columns) == 12
+    assert 1 / (1 + np.exp(-(sum(values) + base_value))) == pytest.approx(score)
+    assert bundle.drift_baseline["reference_rows"] == 40
