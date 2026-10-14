@@ -105,7 +105,7 @@ MLflow logging is optional. Set `MLFLOW_TRACKING_URI` to enable tracking and `ML
 
 Pull requests run Python regression tests, JavaScript tests, synthetic training smoke, and real container smoke on Linux amd64 and arm64. The container smoke requires a prediction and a completed asynchronous explanation, and checks invalid input and duplicate IDs. A failed check stops publication.
 
-After checks pass on `main`, the package job publishes immutable commit and `latest` tags with provenance and an SBOM. A synthetic training artifact is uploaded separately and never substituted for the packaged model. The workflow publishes a package; it does not deploy a production system.
+After checks pass on `main`, the package job publishes immutable commit and `latest` tags with provenance and an SBOM. Pushes that change only Markdown or files under `docs/` skip this workflow; pull requests still run the full checks. A synthetic training artifact is uploaded separately and never substituted for the packaged model. The workflow publishes a package; it does not deploy a production system.
 
 The Helm chart under `charts/fraud-detection/` is an optional deployment example with an explicit image tag. Historical raw manifests under `archive/k8s/`, older observability files, and worker-recovery notes are retained as references, not verified release paths. Kubernetes rollout, failover, monitoring dashboards, authentication, production load, and real fraud-model accuracy require separate validation.
 
