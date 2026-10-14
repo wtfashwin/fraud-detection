@@ -39,22 +39,22 @@ docker compose --env-file .env.example down
 
 `down` keeps local data volumes. Add `-v` only when deliberately discarding local demonstration records.
 
-## Pull a published image
+## Run a published image
 
-The existing package is at [GHCR](https://github.com/wtfashwin/fraud-detection/pkgs/container/fraud-api). The historical image below predates the reliability fixes in this branch:
+[Build 38635117727](https://github.com/wtfashwin/fraud-detection/actions/runs/38635117727) published the image tag `b6612a8b888c7706e9c926db1956e103acd04ed3` for Linux amd64 and arm64. Use the Compose file from that same commit. The command below pins the verified image digest.
 
-```sh
-docker pull ghcr.io/wtfashwin/fraud-api:8192bd3f4d2d5ac053ccf79fb90fc6c706e2ee86
-```
-
-After an enhanced version is published, select its immutable commit tag and use the matching Compose file:
+Start with a fresh checkout:
 
 ```sh
-FRAUD_IMAGE=ghcr.io/wtfashwin/fraud-api:<published-commit-sha> \
+git clone https://github.com/wtfashwin/fraud-detection.git fraud-detection-release
+cd fraud-detection-release
+git checkout --detach b6612a8b888c7706e9c926db1956e103acd04ed3
+FRAUD_IMAGE=ghcr.io/wtfashwin/fraud-api@sha256:7b204316bd0f0a6e6dca0168c66edbb036dea4b8299678526bbb9bf66d1c90dd \
   docker compose --env-file .env.example up -d --no-build --wait
+python3 scripts/smoke_test.py
 ```
 
-Pulling an image alone does not start PostgreSQL or Redis. Avoid pairing historical images with this branch's worker command and schema. Release images include OCI source/documentation/revision metadata. The workflow tests both Linux amd64 and arm64 before publishing those architectures.
+Compose starts the API and worker from the selected image, plus PostgreSQL and Redis. Open [the demo](http://127.0.0.1:8000/demo/) after the smoke check succeeds. [GHCR](https://github.com/wtfashwin/fraud-detection/pkgs/container/fraud-api) lists other published versions; use their matching source commit when selecting a different image.
 
 ## API contract
 
