@@ -1,261 +1,115 @@
-name: CI/CD 
-
+name: Test and package
 on:
+  pull_request:
   push:
-    branches: [ main ]
-    
+    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
-  packages: write
-  issues: write
-  pull-requests: write
-
-env:
-  IMAGE_NAME: fraud-api
-  REGISTRY: ghcr.io
-  REGISTRY_OWNER: ${{ github.repository_owner }}
-
+concurrency:
+  group: fraud-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  validate_model:
-    name: Validate Model
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install system dependencies (Debian)  
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential gcc gfortran libpq-dev libopenblas-dev liblapack-dev libomp-dev curl
-        timeout-minutes: 5
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install -r requirements.txt
-          pip install httpx pytest
-        timeout-minutes: 10
-
-      - name: Generate synthetic data for CI
+          cache: pip
+          cache-dependency-path: 'requirements*.txt'
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+      - name: Synthetic training smoke (not a quality gate)
         run: |
           python scripts/generate_synthetic_data.py
-        env:
-          CI_SYNTHETIC_SAMPLES: "500"
-        timeout-minutes: 5
-      
-      - name: Verify Data File Exists
-        run: |
-          # List the contents of the 'data' directory
-          echo "Listing contents of 'data/' directory:"
-          ls -l data/
-
-      - name: Set PYTHONPATH
-        run: echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
-
-      - name: Run tests
-        run: |
-          pytest -q
-        timeout-minutes: 10
-
-      - name: Train model
-        run: |
           python train_model.py
         env:
+          CI_SYNTHETIC_SAMPLES: '500'
           DATA_CSV: data/creditcard.csv
+          MODEL_OUTPUT_DIR: models/trained
           MLFLOW_TRACKING_URI: file:./mlruns
-          MLFLOW_EXPERIMENT: fraud-detection-ci
-          MLFLOW_MODEL_NAME: fraud-detection-model-ci
-          MLFLOW_AUC_THRESHOLD: "0.70"
-        timeout-minutes: 15
-
-      - name: Upload model artifacts
-        uses: actions/upload-artifact@v4
+          MLFLOW_EXPERIMENT: synthetic-smoke
+          MLFLOW_REGISTER_MODEL: '0'
+      - uses: actions/upload-artifact@v4
         with:
-          name: model-artifacts
-          path: |
-            models/logistic_model.joblib
-            models/scaler.joblib
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
+          name: synthetic-training-smoke-only
+          path: models/trained/
+          if-no-files-found: error
+  chart:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: azure/setup-helm@v4.3.1
+        with:
+          version: v3.19.0
+      - run: pip install PyYAML==6.0.3
+      - run: python charts/fraud-detection/tests/check_render.py --helm helm
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test fraud-frontend/tests/*.test.*
+  container:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start isolated core stack
+        run: docker compose --env-file .env.example up --build -d --wait --wait-timeout 120
+      - name: Prediction and asynchronous explanation smoke
+        run: python3 scripts/smoke_test.py --url http://127.0.0.1:8000
+      - name: Logs on failure
+        if: failure()
+        run: docker compose --env-file .env.example logs --tail 100
+      - name: Stop services
+        if: always()
+        run: docker compose --env-file .env.example down -v
+  publish:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [tests, frontend, chart, container]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v4
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/fraud-api
+          tags: |
+            type=raw,value=${{ github.sha }}
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.REGISTRY_OWNER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-        timeout-minutes: 15
-
-  deploy_to_minikube:
-    name: Deploy to Minikube (CD)
-    runs-on: ubuntu-latest
-    needs: validate_model
-    if: needs.validate_model.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download model artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: model-artifacts
-        timeout-minutes: 5
-
-      - name: Set up Minikube
-        uses: medyagh/setup-minikube@latest
-        with:
-          minikube-version: '1.30.0'
-          kubernetes-version: '1.27.0'
-          driver: 'docker'
-        timeout-minutes: 5
-
-      - name: Wait for Minikube to be Ready
-        run: |
-          kubectl wait --for=condition=Ready node --all --timeout=120s
-        timeout-minutes: 5
-
-      - name: Configure Helm and Kube context
-        run: |
-          helm version
-          kubectl version --client
-        timeout-minutes: 3
-
-      - name: Add Helm repositories and update dependencies
-        run: |
-          echo "Adding Helm repositories..."
-          helm repo add bitnami https://charts.bitnami.com/bitnami
-          helm repo add community-charts https://community-charts.github.io/helm-charts
-          helm repo add kedacore https://kedacore.github.io/charts
-          echo "Updating Helm repositories..."
-          helm repo update
-          echo "Helm repositories updated successfully"
-        timeout-minutes: 5
-
-      - name: Build Helm dependencies with error handling
-        run: |
-          echo "Building Helm dependencies..."
-          # Try to build dependencies, but continue even if it fails
-          if helm dependency build ./charts/fraud-detection; then
-            echo "Helm dependencies built successfully"
-          else
-            echo "Warning: Failed to build Helm dependencies, continuing with deployment"
-          fi
-        timeout-minutes: 5
-
-      - name: Install/Ensure KEDA is available
-        run: |
-          echo "Installing KEDA..."
-          helm upgrade --install keda kedacore/keda --namespace keda --create-namespace --wait
-        timeout-minutes: 5
-
-      - name: Authenticate Docker to Minikube registry (if using local registry)
-        run: |
-          echo "Using GHCR image: ${{ env.REGISTRY }}/${{ env.REGISTRY_OWNER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-        timeout-minutes: 1
-
-      - name: Deploy Helm chart (upgrade/install)
-        run: |
-          echo "Deploying Helm chart..."
-          # Use --dependency-update to ensure dependencies are updated during deployment
-          helm upgrade --install fraud-detection ./charts/fraud-detection \
-            --set api.image.repository=${{ env.REGISTRY }}/${{ env.REGISTRY_OWNER }}/${{ env.IMAGE_NAME }} \
-            --set api.image.tag=${{ github.sha }} \
-            --dependency-update \
-            --timeout 5m
-        timeout-minutes: 8
-
-      # Debugging steps to identify deployment issues
-      - name: Get Pod Status for Debugging
-        run: |
-          echo "=== Getting Pod Status ==="
-          kubectl get pods -l app=fraud-detection,component=api --namespace default
-        if: ${{ always() }}
-        timeout-minutes: 1
-
-      - name: Describe Pods for Detailed Error Messages
-        run: |
-          echo "=== Describing Pods ==="
-          # Get the name of the failing pod using correct label selector
-          POD_NAMES=$(kubectl get pods -l app=fraud-detection,component=api -o jsonpath="{.items[*].metadata.name}" --namespace default)
-          
-          for POD_NAME in $POD_NAMES; do
-            echo "--- Describing Pod: $POD_NAME ---"
-            kubectl describe pod "$POD_NAME" --namespace default
-            echo ""
-          done
-        if: ${{ always() }}
-        timeout-minutes: 2
-
-      - name: Get Pod Logs
-        run: |
-          echo "=== Getting Pod Logs ==="
-          # Get the names of all pods using correct label selector
-          POD_NAMES=$(kubectl get pods -l app=fraud-detection,component=api -o jsonpath="{.items[*].metadata.name}" --namespace default)
-          
-          for POD_NAME in $POD_NAMES; do
-            echo "--- Getting Logs for Pod: $POD_NAME ---"
-            kubectl logs "$POD_NAME" --namespace default || echo "Failed to get logs for $POD_NAME"
-            
-            # Check logs for a previous instance if it's crashing
-            echo "--- Getting Previous Logs for Pod: $POD_NAME ---"
-            kubectl logs "$POD_NAME" --previous --namespace default || echo "No previous logs available for $POD_NAME"
-            echo ""
-          done
-        if: ${{ always() }}
-        timeout-minutes: 2
-
-      - name: Wait for API deployment rollout
-        run: |
-          # Get the actual deployment name from Helm release
-          DEPLOYMENT_NAME=$(kubectl get deployment -l app=fraud-detection,component=api -o jsonpath="{.items[0].metadata.name}" --namespace default)
-          echo "Waiting for deployment: $DEPLOYMENT_NAME"
-          kubectl rollout status deployment/$DEPLOYMENT_NAME --namespace default --timeout=300s
-        timeout-minutes: 8
-
-      - name: Verify API health endpoint
-        run: |
-          echo "=== Checking API Health ==="
-          # Wait a bit for the service to be available
-          sleep 15
-          # Get the service name from Helm release
-          SERVICE_NAME=$(kubectl get service -l app=fraud-detection,component=api -o jsonpath="{.items[0].metadata.name}" --namespace default || echo "fraud-detection-api")
-          echo "Port-forwarding service: $SERVICE_NAME"
-          kubectl port-forward service/$SERVICE_NAME 8000:8000 --namespace default &
-          PORT_FORWARD_PID=$!
-          # Give port-forward time to start
-          sleep 10
-          # Try to access the health endpoint with retries
-          for i in {1..5}; do
-            if curl -f http://localhost:8000/health; then
-              echo "Health check passed"
-              break
-            else
-              echo "Health check attempt $i failed, retrying..."
-              sleep 5
-            fi
-          done || echo "Health check failed after retries"
-          # Kill the port-forward process
-          kill $PORT_FORWARD_PID 2>/dev/null || true
-        timeout-minutes: 3
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VCS_REF=${{ github.sha }}
+          provenance: mode=max
+          sbom: true

@@ -3,53 +3,77 @@ kind: Deployment
 metadata:
   name: {{ include "fraud-detection.fullname" . }}-worker
   labels:
-    app: fraud-detection
-    component: xai-worker
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
 spec:
-  replicas: 1  # Initial replica count, KEDA will manage scaling
+  {{- if not .Values.worker.autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
-      app: fraud-detection
-      component: xai-worker
+      {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
   template:
     metadata:
       labels:
-        app: fraud-detection
-        component: xai-worker
+        {{- include "fraud-detection.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        checksum/database: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
     spec:
+      terminationGracePeriodSeconds: 60
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+      - name: wait-for-schema
+        image: {{ include "fraud-detection.image" . | quote }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: [python, -c]
+        args:
+        - |
+          import os, time
+          from sqlalchemy import create_engine, text
+          engine = create_engine(os.environ["DATABASE_URL"], connect_args={"connect_timeout": 3})
+          for attempt in range(60):
+              try:
+                  with engine.connect() as connection:
+                      connection.execute(text("SELECT status, base_value, explanation_method FROM shap_explanations LIMIT 0"))
+                  break
+              except Exception:
+                  if attempt == 59:
+                      raise
+                  time.sleep(2)
+        env:
+          {{- include "fraud-detection.environment" . | nindent 10 }}
       containers:
       - name: worker
-        image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
-        imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
-        command: ["celery", "-A", "xai_tasks", "worker", "--loglevel=info"]
+        image: {{ include "fraud-detection.image" . | quote }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        # Args preserve the image entrypoint. Celery handles TERM for this worker.
+        args: [celery, -A, api.worker.app, worker, --loglevel=info, "--concurrency={{ .Values.worker.concurrency }}"]
         env:
-        - name: DATABASE_URL
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "fraud-detection.fullname" . }}-db
-              key: DATABASE_URL
-        # Updated to use Redis with Sentinel for HA
-        - name: CELERY_BROKER_URL
-          value: "sentinel://{{ include "fraud-detection.fullname" . }}-redis-master:26379/0"
-        - name: OTEL_SERVICE_NAME
-          value: "xai-worker"
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: {{ .Values.otel.endpoint | quote }}
+          {{- include "fraud-detection.environment" . | nindent 10 }}
+          - name: RUN_MIGRATIONS
+            value: "0"
+          - name: OTEL_SERVICE_NAME
+            value: fraud-worker
         resources:
-          {{- toYaml .Values.worker.resources | nindent 12 }}
-        lifecycle:
-          preStop:
-            exec:
-              command: ["/bin/sh", "-c", "celery -A xai_tasks control shutdown"]
+          {{- toYaml .Values.worker.resources | nindent 10 }}
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          runAsGroup: 10001
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
         readinessProbe:
           exec:
             command:
-            - celery
-            - -A
-            - xai_tasks
-            - inspect
-            - ping
-            - -d
-            - celery@$HOSTNAME
+            - /bin/sh
+            - -ec
+            - 'celery -A api.worker.app inspect ping --destination "celery@$HOSTNAME" --timeout 3 | grep -q pong'
           initialDelaySeconds: 15
-          periodSeconds: 10
+          periodSeconds: 20
+          timeoutSeconds: 10
