@@ -35,7 +35,9 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY training ./training
 COPY scripts ./scripts
-RUN mkdir -p /app/models/trained /app/data /app/plots && chown -R appuser:appuser /app/models/trained /app/data /app/plots
+RUN chmod +x /app/scripts/run_migrations.sh \
+    && mkdir -p /app/models/trained /app/data /app/plots \
+    && chown -R appuser:appuser /app/models/trained /app/data /app/plots
 ENV MODEL_OUTPUT_DIR=/app/models/trained
 USER 10001:10001
 

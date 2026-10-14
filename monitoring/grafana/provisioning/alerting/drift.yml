@@ -3,7 +3,7 @@ groups:
   - orgId: 1
     name: fraud-input-distribution
     folder: Fraud monitoring
-    interval: 15s
+    interval: 30s
     rules:
       - uid: fraud-input-distribution-drift
         title: Raw fraud input distribution shifted

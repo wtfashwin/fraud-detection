@@ -103,7 +103,7 @@ jobs:
         run: docker build --target training -t fraud-training:ci .
       - name: Check optional training image dependencies
         run: >-
-          docker run --rm --entrypoint python fraud-training:ci
+          docker run --rm -e RUN_MIGRATIONS=0 fraud-training:ci python
           -c "import mlflow, shap, xgboost; from api.inference import load_bundle; assert load_bundle().score([0.0] * 30)[0] in (0, 1); print(xgboost.__version__)"
       - name: Train isolated synthetic bundle in the optional image
         run: |
