@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from db.models import Base
 
 db_url = os.getenv('DATABASE_URL', 'postgresql+psycopg2://postgres:postgres@postgres:5432/fraud')
-config.set_main_option('sqlalchemy.url', db_url)
+config.set_main_option('sqlalchemy.url', db_url.replace('%', '%%'))
 
 target_metadata = Base.metadata
 

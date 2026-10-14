@@ -185,3 +185,7 @@ models/*.pkl
 # Temporary files
 *.tmp
 *.bak
+# Isolated training outputs and synthetic metadata
+models/trained/
+models/preprocessed/
+data/*.metadata.json

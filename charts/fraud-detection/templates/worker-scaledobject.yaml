@@ -1,18 +1,22 @@
+{{- if .Values.worker.autoscaling.enabled }}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
   name: {{ include "fraud-detection.fullname" . }}-worker-scaler
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
-    name: {{ .Values.worker.name }}
-  minReplicaCount: 0
-  maxReplicaCount: {{ .Values.worker.maxReplicas | default 10 }}
+    name: {{ include "fraud-detection.fullname" . }}-worker
+  minReplicaCount: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.worker.autoscaling.maxReplicas }}
   pollingInterval: 15
   cooldownPeriod: 30
   triggers:
   - type: redis
     metadata:
-      address: redis://{{ include "fraud-detection.fullname" . }}-redis-master:6379
+      address: {{ printf "%s:6379" (include "fraud-detection.redisHost" .) | quote }}
       listName: celery
-      listLength: "5"
+      listLength: {{ .Values.worker.autoscaling.queueLength | quote }}
       enableTLS: "false"
+{{- end }}
