@@ -37,10 +37,13 @@ def validate_dataset(frame):
 
 
 def make_smote(labels, random_state=42):
-    minority_count = int(pd.Series(labels).value_counts().min())
+    counts = pd.Series(labels).value_counts()
+    minority_count = int(counts.min())
+    if int(int(counts.max()) * 0.5) <= minority_count:
+        return "passthrough"
     if minority_count < 2:
         raise ValueError("SMOTE requires at least two minority training rows in every fold")
-    return SMOTE(random_state=random_state, k_neighbors=min(5, minority_count - 1))
+    return SMOTE(random_state=random_state, k_neighbors=min(5, minority_count - 1), sampling_strategy=0.5)
 
 
 def prepare_data(frame, test_size=0.2, random_state=42):
@@ -49,7 +52,10 @@ def prepare_data(frame, test_size=0.2, random_state=42):
         features, labels, test_size=test_size, random_state=random_state, stratify=labels,
     )
     scaler = StandardScaler().fit(X_train)
-    X_res, y_res = make_smote(y_train, random_state).fit_resample(scaler.transform(X_train), y_train)
+    X_res, y_res = scaler.transform(X_train), y_train
+    sampler = make_smote(y_train, random_state)
+    if sampler != "passthrough":
+        X_res, y_res = sampler.fit_resample(X_res, y_res)
     return {"X_res": X_res, "y_res": np.asarray(y_res),
             "X_test": scaler.transform(X_test), "y_test": y_test.to_numpy(),
             "scaler": scaler, "features": FEATURE_NAMES.copy()}

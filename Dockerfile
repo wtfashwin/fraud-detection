@@ -5,6 +5,7 @@ RUN useradd --create-home --uid 10001 appuser
 COPY requirements-runtime.txt ./
 RUN pip install --no-cache-dir -r requirements-runtime.txt
 COPY api ./api
+COPY training/__init__.py training/features.py ./training/
 COPY db ./db
 COPY alembic ./alembic
 COPY alembic.ini xai_tasks.py ./

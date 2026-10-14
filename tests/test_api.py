@@ -269,3 +269,41 @@ def test_readiness_rejects_historical_partial_schema(api_client):
     with engine.begin() as connection:
         connection.execute(text("CREATE TABLE shap_explanations (transaction_id VARCHAR(128) PRIMARY KEY, shap_values JSON)"))
     assert client.get("/ready").status_code == 503
+
+
+def test_health_exposes_shared_drift_without_failing_liveness(api_client, monkeypatch):
+    from api.drift import DriftMonitor, create_baseline
+    from test_drift import MemoryRedis
+    client, module, _ = api_client
+    baseline = create_baseline(np.zeros((20, 3)), ["Time", "V1", "Amount"], source={"data_kind": "synthetic"})
+    monitor = DriftMonitor(baseline, client=MemoryRedis(), min_samples=20)
+    monkeypatch.setattr(module, "get_drift_monitor", lambda: monitor)
+    assert client.get("/health").json()["drift"]["status"] == "WARMING_UP"
+    for i in range(20):
+        response = client.post("/predict", json={"transaction_id": f"synthetic-drift-{i}", "features": [100., 100., 100.]})
+        assert response.status_code == 200
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json()["status"] == "UP"
+    assert health.json()["drift"]["status"] == "DRIFT"
+    assert health.json()["drift"]["features"]["V1"]["statistic"] == 1.0
+    assert 'fraud_drift_ks{feature="V1"} 1.0' in client.get("/metrics").text
+
+
+def test_legacy_bundle_reports_unavailable_drift_honestly(api_client):
+    client, _, _ = api_client
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["drift"]["status"] == "UNAVAILABLE"
+    assert response.json()["drift"]["features"] == {}
+
+
+def test_negative_amount_in_raw_pipeline_is_input_error(api_client, monkeypatch):
+    from api.inference import InferenceBundle
+    from sklearn.pipeline import Pipeline
+    client, module, _ = api_client
+    legacy = module.BUNDLE
+    pipeline = Pipeline([("scaler", legacy.scaler), ("model", legacy.model)])
+    monkeypatch.setattr(module, "BUNDLE", InferenceBundle(pipeline, legacy.scaler, legacy.columns, raw_pipeline=True))
+    response = client.post("/predict", json={"features": [1., -1., -2.]})
+    assert response.status_code == 422

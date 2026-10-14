@@ -1,0 +1,46 @@
+rule_files:
+  - ../prometheus/rules/prediction-drift.yml
+evaluation_interval: 15s
+tests:
+  - name: sustained shifted feature fires after 30 seconds
+    interval: 15s
+    input_series:
+      - series: 'fraud_drift_ks{feature="V1",job="fraud-api",instance="api:8000"}'
+        values: '0.8 0.8 0.8 0.8'
+      - series: 'fraud_drift_ks{feature="Amount",job="fraud-api",instance="api:8000"}'
+        values: '0.04 0.04 0.04 0.04'
+    alert_rule_test:
+      - eval_time: 15s
+        alertname: FraudInputDistributionDrift
+        exp_alerts: []
+      - eval_time: 45s
+        alertname: FraudInputDistributionDrift
+        exp_alerts:
+          - exp_labels:
+              feature: V1
+              severity: warning
+              service: fraud-api
+            exp_annotations:
+              summary: Raw fraud input distribution shifted
+              description: KS statistic exceeded 0.05 for 30 seconds. This does not establish an AUC decrease.
+              runbook_url: https://github.com/wtfashwin/fraud-detection/blob/main/docs/runbooks/PredictionDrift.md
+  - name: exact threshold is not exceeded
+    interval: 15s
+    input_series:
+      - series: 'fraud_drift_ks{feature="V1"}'
+        values: '0.05 0.05 0.05 0.05'
+      - series: 'fraud_drift_available'
+        values: '1 1 1 1'
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: FraudInputDistributionDrift
+        exp_alerts: []
+  - name: unavailable drift emits no KS series and no distribution alert
+    interval: 15s
+    input_series:
+      - series: 'fraud_drift_available'
+        values: '0 0 0 0'
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: FraudInputDistributionDrift
+        exp_alerts: []

@@ -1,0 +1,14 @@
+groups:
+  - name: prediction-drift
+    interval: 15s
+    rules:
+      - alert: FraudInputDistributionDrift
+        expr: max by (feature) (fraud_drift_ks) > 0.05
+        for: 30s
+        labels:
+          severity: warning
+          service: fraud-api
+        annotations:
+          summary: Raw fraud input distribution shifted
+          description: KS statistic exceeded 0.05 for 30 seconds. This does not establish an AUC decrease.
+          runbook_url: https://github.com/wtfashwin/fraud-detection/blob/main/docs/runbooks/PredictionDrift.md

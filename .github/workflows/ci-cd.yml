@@ -32,7 +32,19 @@ jobs:
           MODEL_OUTPUT_DIR: models/trained
           MLFLOW_TRACKING_URI: file:./mlruns
           MLFLOW_EXPERIMENT: synthetic-smoke
-          MLFLOW_REGISTER_MODEL: '0'
+          MLFLOW_REGISTER_MODEL: '1'
+          MLFLOW_REGISTRATION_MODE: smoke
+          MLFLOW_MODEL_NAME: ci-smoke-fraud-api
+      - name: Verify throwaway smoke registry entry
+        run: |
+          python - <<'PY'
+          from mlflow.tracking import MlflowClient
+          versions = MlflowClient(tracking_uri="file:./mlruns").search_model_versions("name='ci-smoke-fraud-api'")
+          assert len(versions) == 1
+          assert versions[0].tags['registration_mode'] == 'smoke'
+          assert versions[0].tags['production_approved'] == 'false'
+          assert versions[0].tags['validation_scope'] == 'synthetic-smoke-only'
+          PY
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: synthetic-training-smoke-only
@@ -51,6 +63,11 @@ jobs:
           version: v3.19.0
       - run: pip install PyYAML==6.0.3
       - run: python charts/fraud-detection/tests/check_render.py --helm helm
+      - name: Validate drift alert rules
+        run: >-
+          docker run --rm --entrypoint /bin/promtool
+          -v "$PWD/monitoring:/work:ro" prom/prometheus:v2.54.1
+          test rules /work/tests/drift_rules.test.yml
   frontend:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -72,7 +89,16 @@ jobs:
       - name: Build and start isolated core stack
         run: docker compose --env-file .env.example up --build -d --wait --wait-timeout 120
       - name: Prediction and asynchronous explanation smoke
-        run: python3 scripts/smoke_test.py --url http://127.0.0.1:8000
+        run: >-
+          python3 scripts/smoke_test.py --url http://127.0.0.1:8000
+          --features-csv tests/fixtures/synthetic_transaction.csv
+          --output reports/runtime/http-smoke.json
+      - name: Save actual HTTP prediction and explanation responses
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: http-smoke-${{ matrix.runner }}
+          path: reports/runtime/http-smoke.json
+          if-no-files-found: error
       - name: Build optional CPU training image
         run: docker build --target training -t fraud-training:ci .
       - name: Check optional training image dependencies

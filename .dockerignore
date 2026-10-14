@@ -15,6 +15,7 @@ tests
 docs
 models/trained
 models/preprocessed
+models/*/
 web/tests
 archive
 **/*.log

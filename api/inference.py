@@ -10,6 +10,11 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class InvalidFeatures(ValueError):
+    """A submitted raw transaction violates the serving input contract."""
+
+
+
 def artifact_path(value):
     path = Path(value).expanduser()
     return path if path.is_absolute() else ROOT / path
@@ -22,13 +27,32 @@ class InferenceBundle:
     columns: list[str]
     source: str = "local"
     raw_pipeline: bool = False
+    drift_baseline: dict | None = None
+    baseline_error: str | None = None
+
+    @property
+    def explanation_columns(self):
+        names = list(self.columns)
+        if self.raw_pipeline:
+            for _, step in self.model.steps[:-1]:
+                if step is None or (isinstance(step, str) and step == "passthrough"):
+                    continue
+                if hasattr(step, "transform"):
+                    if not hasattr(step, "get_feature_names_out"):
+                        raise ValueError("Pipeline transformer must expose its output feature names")
+                    names = list(step.get_feature_names_out(names))
+                elif not hasattr(step, "fit_resample"):
+                    raise ValueError("Unsupported inference preprocessing step")
+        return names
 
     def prepare(self, features):
         values = np.asarray(features, dtype=float)
         if values.shape != (len(self.columns),) or not np.isfinite(values).all():
-            raise ValueError(f"Input must contain {len(self.columns)} finite numeric features")
+            raise InvalidFeatures(f"Input must contain {len(self.columns)} finite numeric features")
         raw = pd.DataFrame([values], columns=self.columns)
         if self.raw_pipeline:
+            if "Amount" in self.columns and raw["Amount"].iloc[0] < 0:
+                raise InvalidFeatures("Amount must be nonnegative")
             return raw
         if getattr(self.scaler, "n_features_in_", len(self.columns)) != len(self.columns):
             raise ValueError("Scaler feature count does not match model feature count")
@@ -63,7 +87,7 @@ class InferenceBundle:
             if not hasattr(model, "steps"):
                 raise ValueError("Registered model must contain its raw-input preprocessing pipeline")
             for _, step in model.steps[:-1]:
-                if step is None or step == "passthrough":
+                if step is None or (isinstance(step, str) and step == "passthrough"):
                     continue
                 if hasattr(step, "transform"):
                     data = step.transform(data)
@@ -73,7 +97,8 @@ class InferenceBundle:
                 else:
                     raise ValueError("Unsupported inference preprocessing step")
             model = model.steps[-1][1]
-        if hasattr(model, "coef_") and np.asarray(model.coef_).shape == (1, len(self.columns)):
+        explanation_columns = self.explanation_columns
+        if hasattr(model, "coef_") and np.asarray(model.coef_).shape == (1, len(explanation_columns)):
             # Exact linear SHAP in log-odds relative to an explicit zero reference.
             values = np.asarray(data)[0] * np.asarray(model.coef_)[0]
             base_value = float(np.asarray(model.intercept_).reshape(-1)[0])
@@ -85,45 +110,66 @@ class InferenceBundle:
             import shap
             explainer = shap.TreeExplainer(model)
             values = np.asarray(explainer.shap_values(data))
-            if values.shape == (1, len(self.columns), 2):
+            if values.shape == (1, len(explanation_columns), 2):
                 values = values[:, :, 1]
             values = values.reshape(-1)
             base = np.asarray(explainer.expected_value).reshape(-1)
             base_value = float(base[-1])
             method = "tree_shap_raw_output"
         values = np.asarray(values, dtype=float).reshape(-1)
-        if len(values) != len(self.columns) or not np.isfinite(values).all() or not np.isfinite(base_value):
+        if len(values) != len(explanation_columns) or not np.isfinite(values).all() or not np.isfinite(base_value):
             raise ValueError("Model explanation has invalid shape or nonfinite values")
         return values.tolist(), base_value, method
 
 
 def load_bundle(model_dir=None):
+    from api.drift import load_baseline
     directory = artifact_path(model_dir or os.getenv("MODEL_DIR", "models"))
-    model_default = "xgb_model.joblib" if (directory / "xgb_model.joblib").is_file() else "logistic_model.joblib"
+    if (directory / "pipeline.joblib").is_file():
+        model_default = "pipeline.joblib"
+    else:
+        model_default = "xgb_model.joblib" if (directory / "xgb_model.joblib").is_file() else "logistic_model.joblib"
     model_path = artifact_path(os.getenv("MODEL_PATH", str(directory / model_default)))
-    scaler = joblib.load(artifact_path(os.getenv("SCALER_PATH", str(directory / "scaler.joblib"))))
     columns = list(joblib.load(artifact_path(os.getenv("COLUMNS_PATH", str(directory / "columns.joblib")))))
     if not columns or len(set(columns)) != len(columns) or not all(isinstance(c, str) and c for c in columns):
         raise ValueError("Model feature names must be unique, nonempty strings")
     uri = os.getenv("MLFLOW_MODEL_URI")
     if uri:
-        # Remote loading is opt-in. Registered models must include raw-input preprocessing.
         import mlflow.sklearn
         model = mlflow.sklearn.load_model(uri)
-        steps = getattr(model, "named_steps", {})
-        remote_scaler = steps.get("scaler")
-        if remote_scaler is None or not hasattr(remote_scaler, "n_features_in_"):
-            raise ValueError("Registered model must include a fitted raw-input scaler pipeline")
-        if getattr(remote_scaler, "n_features_in_") != len(columns):
-            raise ValueError("Registered pipeline scaler feature count does not match saved feature names")
-        remote_columns = list(getattr(remote_scaler, "feature_names_in_", columns))
-        if remote_columns != columns:
-            raise ValueError("Registered pipeline feature order does not match saved feature names")
-        bundle = InferenceBundle(model, scaler, columns, source="mlflow", raw_pipeline=True)
     else:
-        bundle = InferenceBundle(joblib.load(model_path), scaler, columns)
+        model = joblib.load(model_path)
+    raw_pipeline = hasattr(model, "steps")
+    if uri and not raw_pipeline:
+        raise ValueError("Registered model must include its fitted raw-input preprocessing pipeline")
+    if raw_pipeline:
+        scaler = model.named_steps.get("scaler")
+        if scaler is None or not hasattr(scaler, "n_features_in_"):
+            raise ValueError("Model pipeline must include a fitted scaler")
+        model_columns = list(getattr(model, "feature_names_in_", columns))
+        if model_columns != columns:
+            raise ValueError("Pipeline raw feature order does not match saved feature names")
+    else:
+        scaler = joblib.load(artifact_path(os.getenv("SCALER_PATH", str(directory / "scaler.joblib"))))
+    bundle = InferenceBundle(model, scaler, columns, source="mlflow" if uri else "local", raw_pipeline=raw_pipeline)
     if getattr(bundle.model, "n_features_in_", len(columns)) != len(columns):
-        raise ValueError("Model feature count does not match saved feature names")
-    # Catch misaligned or unusable artifacts at startup, before readiness can turn green.
+        raise ValueError("Model raw feature count does not match saved feature names")
+    final_model = model.steps[-1][1] if raw_pipeline else model
+    if getattr(final_model, "n_features_in_", len(bundle.explanation_columns)) != len(bundle.explanation_columns):
+        raise ValueError("Model transformed feature count does not match explanation feature names")
+    # A remote model never silently uses an unrelated local reference sample.
+    baseline_path = os.getenv("DRIFT_BASELINE_PATH")
+    remote_baseline = os.getenv("MLFLOW_DRIFT_BASELINE_URI")
+    try:
+        if remote_baseline:
+            import mlflow.artifacts
+            baseline_path = mlflow.artifacts.download_artifacts(artifact_uri=remote_baseline)
+        elif not uri and baseline_path is None:
+            baseline_path = directory / "drift_baseline.json"
+        if baseline_path is not None:
+            bundle.drift_baseline = load_baseline(artifact_path(baseline_path), columns)
+    except Exception:
+        # Drift reference failure must be visible without taking a valid scorer offline.
+        bundle.baseline_error = "Configured raw training drift baseline is invalid or unavailable"
     bundle.score([0.] * len(columns))
     return bundle

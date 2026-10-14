@@ -66,7 +66,9 @@ services:
   prometheus:
     image: prom/prometheus:v2.54.1
     profiles: [monitoring]
-    volumes: [./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
     ports: ['127.0.0.1:9090:9090']
     networks: [internal]
   grafana:
@@ -74,7 +76,9 @@ services:
     profiles: [monitoring]
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-local-demo-change-me}
-    volumes: [./monitoring/grafana_dashboard.json:/var/lib/grafana/dashboards/fraud_dashboard.json:ro]
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports: ['127.0.0.1:3000:3000']
     networks: [internal]
 volumes:
