@@ -2,6 +2,7 @@ import joblib
 import pandas as pd
 import json
 import os
+import numpy as np
 
 class FraudDetector:
     def __init__(self, model_path, scaler_path, features_path):
@@ -19,17 +20,34 @@ class FraudDetector:
         else:
             raise ValueError("Input data must be dict or pandas DataFrame")
 
-        input_df = input_df[self.features]
-
-        # Scale input features
-        features_scaled = self.scaler.transform(input_df.values)
+        if len(input_df) != 1:
+            raise ValueError("Single prediction requires exactly one transaction")
+        if input_df.columns.duplicated().any():
+            raise ValueError("Duplicate input features are not allowed")
+        missing = sorted(set(self.features) - set(input_df.columns))
+        extra = sorted(set(input_df.columns) - set(self.features))
+        if missing:
+            raise ValueError(f"Missing required features: {missing}")
+        if extra:
+            raise ValueError(f"Unexpected input features: {extra}")
+        try:
+            input_df = input_df[self.features].apply(pd.to_numeric, errors="raise").astype(float)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("Input features must be numeric") from exc
+        if not np.isfinite(input_df.to_numpy()).all():
+            raise ValueError("Input features must contain only finite values")
+        scaler_input = input_df if hasattr(self.scaler, "feature_names_in_") else input_df.to_numpy()
+        features_scaled = self.scaler.transform(scaler_input)
         return features_scaled
 
     def predict(self, input_data):
         features_scaled = self._validate_and_prepare_input(input_data)
         pred = self.model.predict(features_scaled)
-        prob = self.model.predict_proba(features_scaled)[:, 1]
-        return pred[0], prob[0]
+        classes = list(self.model.classes_)
+        if 1 not in classes:
+            raise ValueError("Model must provide fraud class 1")
+        prob = self.model.predict_proba(features_scaled)[:, classes.index(1)]
+        return int(pred[0]), float(prob[0])
 
 if __name__ == "__main__":
     BASE_DIR = 'models'

@@ -1,169 +1,139 @@
+"""Train a complete, isolated model bundle; holdout metrics are not production proof."""
+import hashlib
+from importlib.metadata import version
+import json
 import os
-import warnings
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, StratifiedKFold
-from sklearn.metrics import roc_auc_score
-from imblearn.over_sampling import SMOTE
-from xgboost import XGBClassifier 
-import joblib
-import mlflow
-import mlflow.sklearn
-from mlflow.models import infer_signature
+from pathlib import Path
 
-# Suppress non-critical warnings
-warnings.filterwarnings('ignore', category=UserWarning, module='xgboost')
-warnings.filterwarnings('ignore', category=FutureWarning, module='sklearn')
-warnings.filterwarnings('ignore', category=DeprecationWarning)
+import joblib
+import numpy as np
+import pandas as pd
+from imblearn.pipeline import Pipeline
+from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.preprocessing import StandardScaler
+from xgboost import XGBClassifier
+
+from preprocess import FEATURE_NAMES, make_smote, validate_dataset
+
+
+def fit_training_fold(features, labels, random_state=42, n_estimators=100):
+    # Scaling and resampling are fitted separately within every training fold.
+    # SMOTE already balances the classes, so a second positive-class weight is wrong.
+    pipeline = Pipeline([
+        ("scaler", StandardScaler()),
+        ("smote", make_smote(labels, random_state)),
+        ("model", XGBClassifier(
+            objective="binary:logistic", n_estimators=n_estimators,
+            learning_rate=0.1, max_depth=5, eval_metric="logloss",
+            random_state=random_state, n_jobs=1, scale_pos_weight=1, verbosity=0,
+        )),
+    ])
+    return pipeline.fit(features, labels)
+
+
+def train_and_evaluate(frame, n_splits=5, random_state=42, n_estimators=100, threshold=0.5):
+    from evaluate_model import evaluate_predictions
+
+    features, labels = validate_dataset(frame)
+    X_train, X_test, y_train, y_test = train_test_split(
+        features, labels, test_size=0.2, random_state=random_state, stratify=labels,
+    )
+    if n_splits < 2 or y_train.value_counts().min() < n_splits:
+        raise ValueError("Each training class needs at least cv_folds rows; supply more labelled data or fewer folds")
+    fold_metrics = []
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    for train_idx, valid_idx in cv.split(X_train, y_train):
+        fold = fit_training_fold(X_train.iloc[train_idx], y_train.iloc[train_idx], random_state, n_estimators)
+        scores = fold.predict_proba(X_train.iloc[valid_idx])[:, 1]
+        fold_metrics.append(evaluate_predictions(y_train.iloc[valid_idx], scores, threshold))
+    pipeline = fit_training_fold(X_train, y_train, random_state, n_estimators)
+    metrics = evaluate_predictions(y_test, pipeline.predict_proba(X_test)[:, 1], threshold)
+    metrics.update({
+        "train_rows": len(y_train), "test_rows": len(y_test), "random_state": random_state,
+        "cv_folds": n_splits, "cv_roc_auc_mean": float(np.mean([m["roc_auc"] for m in fold_metrics])),
+        "cv_roc_auc_std": float(np.std([m["roc_auc"] for m in fold_metrics])),
+        "cv_average_precision_mean": float(np.mean([m["average_precision"] for m in fold_metrics])),
+        "cv_fold_metrics": fold_metrics, "evaluation_scope": "random stratified holdout",
+        "probability_calibration": "not validated", "feature_names": FEATURE_NAMES.copy(),
+        "model_parameters": {key: pipeline.named_steps["model"].get_params()[key] for key in
+                             ("n_estimators", "learning_rate", "max_depth", "n_jobs", "scale_pos_weight")},
+        "package_versions": {name: version(name) for name in
+                             ("numpy", "pandas", "scikit-learn", "imbalanced-learn", "xgboost")},
+    })
+    return {"pipeline": pipeline, "metrics": metrics, "features": FEATURE_NAMES.copy(),
+            "input_example": X_test.iloc[:5].copy()}
+
+
+def save_bundle(result, directory):
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    pipeline = result["pipeline"]
+    joblib.dump(pipeline.named_steps["model"], directory / "xgb_model.joblib")
+    joblib.dump(pipeline.named_steps["scaler"], directory / "scaler.joblib")
+    joblib.dump(result["features"], directory / "columns.joblib")
+    (directory / "feature_names.json").write_text(json.dumps(result["features"]) + "\n")
+    (directory / "metrics.json").write_text(json.dumps(result["metrics"], indent=2, allow_nan=False) + "\n")
+
+
+def log_to_mlflow(result):
+    """Log raw-input pipeline with a signature that matches its Nx2 probabilities."""
+    import mlflow
+    import mlflow.sklearn
+    from mlflow.models import infer_signature
+
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+    if not tracking_uri:
+        return None
+    mlflow.set_tracking_uri(tracking_uri)
+    mlflow.set_experiment(os.getenv("MLFLOW_EXPERIMENT", "fraud-detection"))
+    example = result["input_example"]
+    pipeline = result["pipeline"]
+    with mlflow.start_run() as run:
+        mlflow.log_params({"model_type": "XGBoost", "sampling": "training-fold-only SMOTE",
+                           "scale_pos_weight": 1, "random_state": result["metrics"]["random_state"],
+                           "cv_folds": result["metrics"]["cv_folds"]})
+        mlflow.log_metrics({k: float(v) for k, v in result["metrics"].items()
+                            if isinstance(v, (int, float))})
+        mlflow.log_dict(result["metrics"], "evaluation/metrics.json")
+        mlflow.set_tags({"data_kind": result["metrics"].get("data_kind", "unspecified"),
+                         "evaluation_scope": "random stratified holdout; not production proof"})
+        info = mlflow.sklearn.log_model(
+            pipeline, name="model", input_example=example,
+            signature=infer_signature(example, pipeline.predict_proba(example)),
+            pyfunc_predict_fn="predict_proba",
+        )
+        # Use this active run's URI, never last_active_run inside the open run.
+        model_uri = info.model_uri
+        if os.getenv("MLFLOW_REGISTER_MODEL", "0").lower() in {"1", "true"}:
+            if result["metrics"].get("data_kind") != "real":
+                raise ValueError("Model registration requires explicitly identified real evaluation data")
+            minimum_auc = float(os.getenv("MLFLOW_AUC_THRESHOLD", "0.95"))
+            if result["metrics"]["roc_auc"] < minimum_auc:
+                raise ValueError("Held-out ROC AUC is below the configured registration threshold")
+            mlflow.register_model(model_uri, os.getenv("MLFLOW_MODEL_NAME", "fraud-detection-model"))
+        print(f"MLflow run {run.info.run_id}: {model_uri}")
+        return model_uri
+
 
 def main():
-    print("Loading dataset...")
-    df = pd.read_csv(os.getenv('DATA_CSV', 'data/creditcard.csv'))
-
-    print("Checking missing values...")
-    print(df.isnull().sum())
-
-    print("Splitting dataset (Train 80% / Test 20%)...")
-    X = df.drop(columns=["Class"], errors='ignore').values
-    y = df["Class"].values
-    
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+    source = Path(os.getenv("DATA_CSV", "data/creditcard.csv"))
+    directory = Path(os.getenv("MODEL_OUTPUT_DIR", "models/trained"))
+    result = train_and_evaluate(pd.read_csv(source),
+        n_splits=int(os.getenv("CV_FOLDS", "5")),
+        random_state=int(os.getenv("RANDOM_STATE", "42")),
+        n_estimators=int(os.getenv("N_ESTIMATORS", "100")),
+        threshold=float(os.getenv("DECISION_THRESHOLD", "0.5")),
     )
-
-    print("Scaling features (only fitting on Train set)...")
-    scaler = StandardScaler()
-    
-    X_train_scaled = scaler.fit_transform(X_train)
-    
-    X_test_scaled = scaler.transform(X_test) 
-
-    print("Casting target variables to integer...")
-    y_train = y_train.astype(int)
-    y_test = y_test.astype(int)
-    
-    print(f" Class balance before SMOTE → {np.bincount(y_train)}")
-
-    print(" Performing Stratified K-Fold Cross-Validation with SMOTE applied within each fold...")
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    
-    # Calculate scale_pos_weight from original training data
-    neg_count = np.sum(y_train == 0)
-    pos_count = np.sum(y_train == 1)
-    scale_pos_weight = neg_count / pos_count if pos_count > 0 else 1
-    print(f" Scale pos weight for XGBoost: {scale_pos_weight:.2f}")
-
-    cv_scores = []
-    for fold, (train_idx, val_idx) in enumerate(skf.split(X_train_scaled, y_train)):
-        # Split original training data into fold train and validation
-        X_fold_train_raw, X_fold_val = X_train_scaled[train_idx], X_train_scaled[val_idx]
-        y_fold_train_raw, y_fold_val = y_train[train_idx], y_train[val_idx]
-        
-        # Apply SMOTE only to the training fold (not validation) to avoid data leakage
-        print(f"  Fold {fold+1}: Applying SMOTE to training fold...")
-        smote = SMOTE(random_state=42, sampling_strategy='minority')
-        X_fold_train, y_fold_train = smote.fit_resample(X_fold_train_raw, y_fold_train_raw)
-        print(f"    Training samples: {len(y_fold_train_raw)} → {len(y_fold_train)} (after SMOTE)")
-        
-        model_fold = XGBClassifier(
-            objective='binary:logistic',
-            n_estimators=100,
-            learning_rate=0.1,
-            max_depth=5,
-            eval_metric='logloss',
-            random_state=42,
-            n_jobs=-1,
-            scale_pos_weight=scale_pos_weight,
-            verbosity=0  # Suppress XGBoost output
-        )
-        model_fold.fit(X_fold_train, y_fold_train)
-        
-        preds = model_fold.predict_proba(X_fold_val)[:, 1]
-        auc = roc_auc_score(y_fold_val, preds)
-        cv_scores.append(auc)
-        print(f"  Fold {fold+1} AUC: {auc:.4f}")
-    
-    print(f" CV AUC Mean: {np.mean(cv_scores):.4f} (+/- {np.std(cv_scores) * 2:.4f})")
-
-    print(" Training final XGBoost Classifier model with SMOTE on full training set...")
-    # Apply SMOTE to full training set for final model
-    smote = SMOTE(random_state=42, sampling_strategy='minority')
-    X_res, y_res = smote.fit_resample(X_train_scaled, y_train)
-    print(f" Class balance after SMOTE → {np.bincount(y_res)}")
-    
-    model = XGBClassifier(
-        objective='binary:logistic',
-        n_estimators=100,
-        learning_rate=0.1,
-        max_depth=5,
-        eval_metric='logloss',
-        random_state=42,
-        n_jobs=-1,
-        scale_pos_weight=scale_pos_weight,
-        verbosity=0  # Suppress XGBoost output
-    )
-    model.fit(X_res, y_res)
-
-    preds = model.predict_proba(X_test_scaled)[:, 1] 
-    auc = roc_auc_score(y_test, preds)
-    print(f"Test AUC: {auc:.4f}")
-
-    os.makedirs('models', exist_ok=True)
-    joblib.dump(model, 'models/xgb_model.joblib')
-    joblib.dump(scaler, 'models/scaler.joblib')
-    print(" Model and scaler saved to /models")
-
-    try:
-        mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow:5000'))
-        experiment_name = os.getenv('MLFLOW_EXPERIMENT', 'fraud-detection-ci') 
-        model_name = os.getenv('MLFLOW_MODEL_NAME', 'fraud-detection-model')
-        mlflow.set_experiment(experiment_name)
-        
-        with mlflow.start_run():
-            mlflow.log_param('model_type', 'XGBoost')
-            mlflow.log_param('scale_pos_weight', scale_pos_weight)
-            mlflow.log_param('cv_folds', 5)
-            mlflow.log_metric('test_auc', float(auc))
-            mlflow.log_metric('cv_auc_mean', float(np.mean(cv_scores)))
-            mlflow.log_metric('cv_auc_std', float(np.std(cv_scores)))
-            
-            # Create input signature and example for better serving compatibility
-            # Use a sample from test set for signature inference
-            sample_input = X_test_scaled[:5]
-            sample_output = model.predict_proba(sample_input)[:, 1]
-            
-            # Infer signature from sample data
-            signature = infer_signature(sample_input, sample_output)
-            
-            # Create example input (first row of test set)
-            input_example = X_test_scaled[:1]
-            
-            # Log model with signature and example
-            mlflow.sklearn.log_model(
-                model, 
-                'model',
-                signature=signature,
-                input_example=input_example
-            )
-            mlflow.log_artifact('models/scaler.joblib')
-            print(f" Logged run to MLflow experiment '{experiment_name}' with input signature and examples")
-            
-            auc_threshold = float(os.getenv('MLFLOW_AUC_THRESHOLD', '0.95'))
-            if auc >= auc_threshold:
-                try:
-                    result = mlflow.register_model(
-                        f"runs:/{mlflow.last_active_run().info.run_id}/model",
-                        model_name
-                    )
-                    print(f" Registered model version {result.version} (AUC {auc:.4f} >= {auc_threshold})")
-                except Exception as e:
-                    print(f" Model registration failed: {e}")
-            else:
-                print(f"ℹ Model not registered (AUC {auc:.4f} < {auc_threshold})")
-                
-    except Exception as e:
-        print(f" MLflow Tracking Failed (likely connection error): {e}")
+    provenance = source.with_suffix(".metadata.json")
+    source_kind = json.loads(provenance.read_text()).get("data_kind") if provenance.exists() else None
+    result["metrics"].update({"data_kind": source_kind or os.getenv("DATA_KIND", "unspecified"),
+                              "dataset_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                              "dataset_path": str(source)})
+    save_bundle(result, directory)
+    print(json.dumps(result["metrics"], indent=2, allow_nan=False))
+    print(f"Saved matched model/scaler/features to {directory}. No production-quality claim.")
+    # Explicitly configured tracking failures fail the command; they are not fabricated scores.
+    log_to_mlflow(result)
 
 
 if __name__ == "__main__":
