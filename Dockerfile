@@ -12,7 +12,8 @@ COPY alembic.ini xai_tasks.py ./
 COPY scripts/run_migrations.sh ./scripts/run_migrations.sh
 COPY models ./models
 COPY web ./web
-RUN chmod +x /app/scripts/run_migrations.sh && mkdir -p /app/mlruns && chown appuser:appuser /app/mlruns
+RUN chmod +x /app/scripts/run_migrations.sh && mkdir -p /app/mlruns && chown appuser:appuser /app/mlruns \
+    && python -c "from api.inference import load_bundle; assert load_bundle().score([0.0] * 30)[0] in (0, 1)"
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="Fraud Detection API" \
       org.opencontainers.image.description="Fraud scoring API and asynchronous explanations; requires PostgreSQL and Redis. Demo model, not a validated financial control." \

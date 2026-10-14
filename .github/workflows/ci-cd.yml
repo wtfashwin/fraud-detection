@@ -105,12 +105,49 @@ jobs:
         run: >-
           docker run --rm --entrypoint python fraud-training:ci
           -c "import mlflow, shap, xgboost; from api.inference import load_bundle; assert load_bundle().score([0.0] * 30)[0] in (0, 1); print(xgboost.__version__)"
+      - name: Train isolated synthetic bundle in the optional image
+        run: |
+          docker run --name fraud-ci-training --entrypoint sh \
+            -e CI_SYNTHETIC_SAMPLES=500 -e MLFLOW_TRACKING_URI= \
+            -e MLFLOW_REGISTER_MODEL=0 fraud-training:ci \
+            -ec 'python scripts/generate_synthetic_data.py; python -m training.train'
+          docker cp fraud-ci-training:/app/models/trained reports/runtime/trained
+          docker rm fraud-ci-training
+      - name: Set an ephemeral local Grafana credential
+        if: matrix.runner == 'ubuntu-24.04'
+        run: |
+          python3 - <<'PY'
+          import os, secrets
+          credential = secrets.token_urlsafe(24)
+          print('::add-mask::' + credential)
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('GRAFANA_ADMIN_PASSWORD=' + credential + '\n')
+          PY
+      - name: Start synthetic model and local monitoring integration
+        if: matrix.runner == 'ubuntu-24.04'
+        run: >-
+          docker compose --env-file .env.example -f docker-compose.yml
+          -f tests/fixtures/monitoring.compose.yml --profile monitoring
+          up -d --no-build --wait --wait-timeout 120
+      - name: Verify shared Redis drift metrics and Grafana alert firing
+        if: matrix.runner == 'ubuntu-24.04'
+        run: >-
+          python3 scripts/smoke_drift.py --url http://127.0.0.1:8000
+          --grafana-url http://127.0.0.1:3000 --timeout 120
+          --output reports/runtime/drift-smoke.json
+      - name: Save actual drift and alert evaluation results
+        if: matrix.runner == 'ubuntu-24.04'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: drift-monitoring-smoke
+          path: reports/runtime/drift-smoke.json
+          if-no-files-found: error
       - name: Logs on failure
         if: failure()
-        run: docker compose --env-file .env.example logs --tail 100
+        run: docker compose --env-file .env.example --profile monitoring logs --tail 100
       - name: Stop services
         if: always()
-        run: docker compose --env-file .env.example down -v
+        run: docker compose --env-file .env.example --profile monitoring down -v
   publish:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: [tests, frontend, chart, container]

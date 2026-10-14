@@ -145,6 +145,8 @@ Prometheus and Grafana bind to loopback at ports 9090 and 3000. The provisioned 
 
 Pull requests run Python regression tests, JavaScript tests, synthetic training smoke, and real container smoke on Linux amd64 and arm64. The container smoke requires a prediction and a completed asynchronous explanation, checks invalid input and duplicate IDs, and uploads actual HTTP responses. CI also exercises registration in a throwaway local `ci-smoke-*` namespace, explicitly marked synthetic and not production-approved. A failed check stops publication. All JavaScript-based actions use native Node 24 releases.
 
+Both architectures train an isolated synthetic bundle inside the optional image. The amd64 job then serves that bundle with shared Redis, Prometheus, and Grafana, requiring measured KS drift and a healthy managed alert in a real firing state. It uploads an aggregate receipt without raw records or credentials. This checks the monitoring path, not real fraud accuracy.
+
 After checks pass on `main`, the package job publishes immutable commit and `latest` tags with provenance and an SBOM. A synthetic training artifact is uploaded separately and never substituted for the packaged model. The workflow publishes a package; it does not deploy a production system.
 
 The Helm chart under `charts/fraud-detection/` is an optional deployment example with an explicit image tag. Historical raw manifests under `archive/k8s/`, older observability files, and worker-recovery notes remain references. Kubernetes rollout, failover, authentication, production load, probability calibration, and performance on a current deployment cohort require separate validation.
