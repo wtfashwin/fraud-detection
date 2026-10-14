@@ -1,126 +1,79 @@
-# AI-Powered Fraud Detection System
+# Fraud Detection
 
-This project implements a production-grade fraud detection system with asynchronous explainability, MLOps instrumentation, and observability.
+Fraud Detection is a Python prototype for credit-card transaction classification, with an API, background attribution jobs, and deployment configuration.
 
-## Features
-- FastAPI-based prediction API with correlation IDs
-- Async XAI calculations via Celery workers
-- MLflow experiment tracking and model registry
-- Prometheus metrics and Grafana dashboards
-- OpenTelemetry distributed tracing
-- Docker Compose stack for local development
-- Kubernetes deployment manifests and KEDA autoscaling
-- Synthetic data generation for testing
+## What it contains
 
-## Project Structure
-```
-├── api/              # FastAPI application
-├── models/           # Trained models and scalers
-├── scripts/          # Utility scripts
-├── monitoring/       # Prometheus, Grafana, OTEL configs
-├── alembic/          # Database migrations
-├── k8s/              # Kubernetes manifests
-└── docker-compose.yml
-```
+- XGBoost training with scaling, stratified splits, SMOTE, and MLflow logging/registration.
+- A FastAPI prediction service with `/predict`, `/explain/{transaction_id}`, health routes, and Prometheus metrics.
+- Celery attribution workers and PostgreSQL persistence code.
+- Docker Compose, Helm/Kubernetes files, and monitoring configuration for Prometheus, Grafana, Jaeger, and OpenTelemetry.
 
-## Quick Start
+## Local training
 
-### Local Development
-1. Start the full stack:
+The Dockerfile uses Python 3.11. For local exploration:
+
 ```bash
-docker compose up -d
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
-2. Generate synthetic test data:
+`train_model.py` reads a CSV with a `Class` target and numeric feature columns. Its default path is `data/creditcard.csv`, while the included data is named `data/credit_card.csv`. Select the included path explicitly:
+
+```bash
+DATA_CSV=data/credit_card.csv MLFLOW_TRACKING_URI=http://localhost:5000 python train_model.py
+```
+
+Alternatively, create the synthetic development dataset first:
+
 ```bash
 python scripts/generate_synthetic_data.py
 ```
 
-3. Train and register model:
-```bash
-# Set environment variables for MLflow (optional)
-export MLFLOW_TRACKING_URI=http://mlflow:5000
-export MLFLOW_EXPERIMENT=fraud-detection
-export MLFLOW_MODEL_NAME=fraud-detection-model
-export MLFLOW_AUC_THRESHOLD=0.95
+The generator writes `data/creditcard.csv`; its second generated dataset overwrites its first. Training writes `models/xgb_model.joblib` and `models/scaler.joblib`. MLflow errors are caught after local artifacts are saved. Registration depends on the configured AUC threshold; a synthetic-data run does not establish real fraud-detection performance.
 
-# Train using real or synthetic data
-python train_model.py
+## API and service setup
+
+The full stack is configured in `docker-compose.yml`:
+
+```bash
+docker compose up --build -d
 ```
 
-4. Access services:
-- API docs: http://localhost:8000/docs
-- MLflow UI: http://localhost:5000
-- Grafana: http://localhost:3000
-- Jaeger UI: http://localhost:16686
+This setup needs repair before it is a working quick start:
 
-### Model Training & MLflow
-- The `train_model.py` script:
-  - Preprocesses data with SMOTE
-  - Trains a LogisticRegression model
-  - Computes test AUC score
-  - Logs metrics and artifacts to MLflow
-  - Registers model if AUC threshold is met
+- The API broker URL points to `redis-master:26379`, while the Sentinel service is named `redis-sentinel`.
+- The Sentinel command expects Bash in a Redis Alpine image, and the API healthcheck expects curl although the Dockerfile does not install it.
+- `run_migrations.sh` skips migrations when Alembic is absent; Alembic is not declared in `requirements.txt`.
+- API fallback and workers load logistic-model artifacts while training writes an XGBoost model and replaces the shared scaler.
+- Worker attribution inputs and stored results need alignment with the API's feature mapping and explanation lookup.
 
-Environment variables:
-- `DATA_CSV`: Path to training data CSV
-- `MLFLOW_TRACKING_URI`: MLflow server URL
-- `MLFLOW_EXPERIMENT`: Experiment name
-- `MLFLOW_MODEL_NAME`: Name for model registry
-- `MLFLOW_AUC_THRESHOLD`: Min AUC to register model
+Review `DATABASE_URL`, `CELERY_BROKER_URL`, `MLFLOW_TRACKING_URI`, model settings, and deployment credentials before launching shared services. A tracked `.env` is present; review it for private values before reuse or sharing.
 
-### API & Worker
-The system consists of:
-1. FastAPI application (/predict endpoint)
-2. Celery worker for async XAI
-3. PostgreSQL for result persistence
-4. Redis for task queue
-5. Observability stack (Prometheus, Grafana, Jaeger)
+Once the service integration is repaired, API docs are configured at `http://localhost:8000/docs`. Send an ordered numeric `features` array to `/predict`; the order must match `models/feature_names.json`. Predictions and queued explanations are separate operations. The current worker calculates coefficient-based attributions with a feature-value fallback, not validated SHAP explanations.
 
-### CI/CD
-The GitHub Actions workflow:
-1. Runs tests
-2. Generates synthetic data
-3. Trains model on CI dataset
-4. Builds and scans Docker image
-5. Uploads model artifacts
+Configured UIs use ports 5000 for MLflow, 3000 for Grafana, 9090 for Prometheus, and 16686 for Jaeger.
 
-### Production Deployment
-Kubernetes manifests provided:
-- API and worker deployments
-- KEDA ScaledObject for autoscaling
-- HorizontalPodAutoscaler configs
-- Example Prometheus alert rules
+## Project structure
 
-## Development
+- `train_model.py`, `preprocess.py`, `evaluate_model.py` — different training/evaluation paths.
+- `api/`, `xai_tasks.py`, `db/`, `alembic/` — prediction, workers, storage, and migrations.
+- `models/` — checked-in logistic artifacts; training also produces XGBoost artifacts.
+- `docker-compose.yml`, `charts/`, `k8s/`, `monitoring/` — service/deployment configuration.
+- `tests/test_api.py`, `docs/` — API test source and recovery/runbook notes.
 
-### Running Tests
+## Checks
+
+With development dependencies and required services configured:
+
 ```bash
-pytest
-```
-
-### Database Migrations
-```bash
+python -m pytest tests/
 alembic upgrade head
 ```
 
-### Synthetic Data Generation
-For testing without production data:
-```bash
-python scripts/generate_synthetic_data.py
-```
-
-## Monitoring
-- Prometheus metrics at /metrics
-- Grafana dashboards for model/system metrics
-- Jaeger for distributed tracing
-- Structured JSON logging with correlation IDs
-
-## Contributing
-1. Branch from main
-2. Make changes
-3. Run tests and lint
-4. Submit PR
+Pytest and Alembic are not declared in `requirements.txt`. Tests import the API and its service/model dependencies, so they are not isolated checks. Kubernetes manifests and monitoring files are configuration, not evidence of a successful deployment.
 
 ## License
-MIT
+
+The project states MIT, but no license file is included.
