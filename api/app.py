@@ -1,6 +1,7 @@
 """Synchronous fraud scoring with persisted, asynchronous model explanations."""
 from contextlib import asynccontextmanager
 import logging
+import os
 from pathlib import Path
 from typing import Annotated
 import uuid
@@ -11,17 +12,20 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StrictFloat, StrictInt, field_validator
 from prometheus_fastapi_instrumentator import Instrumentator
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Histogram, REGISTRY
 from sqlalchemy import insert, select, update
 from sqlalchemy.exc import IntegrityError
 
-from api.inference import load_bundle
+from api.inference import load_bundle, InvalidFeatures
+from api.drift import DriftMonitor, DriftCollector
 from api.queue import celery_app, check_broker
 from db.db import engine
 from db.models import Explanation
 
 logger = logging.getLogger(__name__)
 BUNDLE = None
+DRIFT_MONITOR = None
+DRIFT_MONITOR_KEY = None
 predictions_submitted = Counter("predictions_submitted_total", "Prediction requests submitted")
 inference_time = Histogram("api_inference_duration_seconds", "Synchronous inference duration")
 
@@ -81,10 +85,31 @@ async def invalid_request(request, exc):
     return JSONResponse(status_code=422, content={"detail": errors})
 
 
+def get_drift_monitor():
+    global DRIFT_MONITOR, DRIFT_MONITOR_KEY
+    config = (os.getenv("DRIFT_MIN_SAMPLES", "20"), os.getenv("DRIFT_MAX_SAMPLES", "512"),
+              os.getenv("DRIFT_KS_THRESHOLD", "0.05"))
+    key = (id(BUNDLE), config)
+    if DRIFT_MONITOR is None or DRIFT_MONITOR_KEY != key:
+        try:
+            DRIFT_MONITOR = DriftMonitor(getattr(BUNDLE, "drift_baseline", None),
+                min_samples=int(config[0]), max_samples=int(config[1]), threshold=float(config[2]),
+                unavailable_reason=getattr(BUNDLE, "baseline_error", None))
+        except (ValueError, TypeError):
+            DRIFT_MONITOR = DriftMonitor(None, unavailable_reason="Drift monitoring configuration is invalid")
+        DRIFT_MONITOR_KEY = key
+    return DRIFT_MONITOR
+
+
 @app.get("/status", tags=["Health"])
-@app.get("/health", tags=["Health"])
 def get_status():
     return {"status": "UP"}
+
+
+@app.get("/health", tags=["Health"])
+def get_health():
+    # Distribution drift does not mean the process is dead or prove an AUC decrease.
+    return {"status": "UP", "drift": get_drift_monitor().report()}
 
 
 @app.get("/ready", tags=["Health"])
@@ -112,7 +137,8 @@ def require_bundle():
 @app.get("/model-info", tags=["Model"])
 def model_info():
     bundle = require_bundle()
-    return {"feature_names": bundle.columns, "feature_count": len(bundle.columns), "model_source": bundle.source}
+    return {"feature_names": bundle.columns, "feature_count": len(bundle.columns), "model_source": bundle.source,
+            "explanation_feature_names": bundle.explanation_columns}
 
 
 @app.post("/predict", response_model=PredictionOut, tags=["Prediction"])
@@ -124,6 +150,8 @@ def predict(transaction: TransactionIn, request: Request):
     try:
         with inference_time.time():
             prediction, score = bundle.score(transaction.features)
+    except InvalidFeatures as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         logger.error("Inference failed (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Model could not score this request") from exc
@@ -160,6 +188,11 @@ def predict(transaction: TransactionIn, request: Request):
             message = "Explanation dispatch is unconfirmed; check saved status before retrying"
         raise HTTPException(status_code=503, detail={"transaction_id": transaction.transaction_id,
                             "status": dispatch_status, "message": message}) from exc
+    # Record only successfully accepted scoring requests; Redis monitoring failure is nonfatal.
+    try:
+        get_drift_monitor().observe(transaction.features)
+    except Exception as exc:
+        logger.warning("Drift observation failed (%s)", type(exc).__name__)
     return PredictionOut(transaction_id=transaction.transaction_id, prediction=prediction, score=score,
                          correlation_id=corr_id, explanation_status="Calculation queued")
 
@@ -183,6 +216,7 @@ def get_explanation(transaction_id: str):
                                       "base_value", "explanation_method")}
 
 
+REGISTRY.register(DriftCollector(lambda: get_drift_monitor()))
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 demo_directory = Path(__file__).resolve().parents[1] / "web"
 if demo_directory.is_dir():

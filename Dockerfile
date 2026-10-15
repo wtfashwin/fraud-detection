@@ -5,13 +5,15 @@ RUN useradd --create-home --uid 10001 appuser
 COPY requirements-runtime.txt ./
 RUN pip install --no-cache-dir -r requirements-runtime.txt
 COPY api ./api
+COPY training/__init__.py training/features.py ./training/
 COPY db ./db
 COPY alembic ./alembic
 COPY alembic.ini xai_tasks.py ./
 COPY scripts/run_migrations.sh ./scripts/run_migrations.sh
 COPY models ./models
 COPY web ./web
-RUN chmod +x /app/scripts/run_migrations.sh && mkdir -p /app/mlruns && chown appuser:appuser /app/mlruns
+RUN chmod +x /app/scripts/run_migrations.sh && mkdir -p /app/mlruns && chown appuser:appuser /app/mlruns \
+    && python -c "from api.inference import load_bundle; assert load_bundle().score([0.0] * 30)[0] in (0, 1)"
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="Fraud Detection API" \
       org.opencontainers.image.description="Fraud scoring API and asynchronous explanations; requires PostgreSQL and Redis. Demo model, not a validated financial control." \
@@ -33,7 +35,9 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY training ./training
 COPY scripts ./scripts
-RUN mkdir -p /app/models/trained /app/data /app/plots && chown -R appuser:appuser /app/models/trained /app/data /app/plots
+RUN chmod +x /app/scripts/run_migrations.sh \
+    && mkdir -p /app/models/trained /app/data /app/plots \
+    && chown -R appuser:appuser /app/models/trained /app/data /app/plots
 ENV MODEL_OUTPUT_DIR=/app/models/trained
 USER 10001:10001
 

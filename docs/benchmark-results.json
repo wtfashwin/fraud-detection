@@ -1,0 +1,275 @@
+{
+  "dataset": {
+    "kind": "public_benchmark",
+    "source": "https://www.openml.org/d/42175",
+    "download_url": "https://openml.org/data/v1/download/21756045/CreditCardFraudDetection.arff",
+    "openml_dataset_id": 42175,
+    "openml_version": 1,
+    "source_sha256": "62416dc7dc34cf7abda5db818e8db92e91152fb2085340f7681bd6f0fe6130ce",
+    "csv_sha256": "2f9cec6e0d657d30c23eb59750d7976a3498d1c2b8899a5800758c51184d2292",
+    "source_md5": "f9af8fd7966f2d2b8a3e5e67158a7757",
+    "rows": 284807,
+    "fraud_rows": 492,
+    "missing_values": 0,
+    "feature_count": 30,
+    "retrieved_at": "2026-10-14T20:28:05.433531+00:00",
+    "license_metadata": "Public",
+    "limits": "Historical anonymized benchmark; V1-V28 already PCA. Random holdout is not a production/time-shift validation.",
+    "data_kind": "real",
+    "source_url": "https://www.openml.org/d/42175"
+  },
+  "experiments": {
+    "optuna": {
+      "roc_auc": 0.9737087522825676,
+      "average_precision": 0.7464725203236272,
+      "precision": 0.3320754716981132,
+      "recall": 0.8979591836734694,
+      "f1": 0.48484848484848486,
+      "confusion_matrix": [
+        [
+          56687,
+          177
+        ],
+        [
+          10,
+          88
+        ]
+      ],
+      "train_rows": 20394,
+      "test_rows": 56962,
+      "random_state": 42,
+      "cv_folds": 5,
+      "cv_roc_auc_mean": 0.9802765741642325,
+      "cv_roc_auc_std": 0.006236178574888784,
+      "feature_engineering": false,
+      "model_feature_names": [
+        "Time",
+        "V1",
+        "V2",
+        "V3",
+        "V4",
+        "V5",
+        "V6",
+        "V7",
+        "V8",
+        "V9",
+        "V10",
+        "V11",
+        "V12",
+        "V13",
+        "V14",
+        "V15",
+        "V16",
+        "V17",
+        "V18",
+        "V19",
+        "V20",
+        "V21",
+        "V22",
+        "V23",
+        "V24",
+        "V25",
+        "V26",
+        "V27",
+        "V28",
+        "Amount"
+      ],
+      "model_parameters": {
+        "n_estimators": 100,
+        "learning_rate": 0.04717052037625178,
+        "max_depth": 9,
+        "n_jobs": 1,
+        "scale_pos_weight": 1.1996737821583596
+      },
+      "optuna_best_trial": 8,
+      "optuna_best_cv_roc_auc": 0.9802765741642325,
+      "optuna_trials": [
+        {
+          "number": 0,
+          "cv_roc_auc": 0.9797997971437844,
+          "parameters": {
+            "learning_rate": 0.03574712922600244,
+            "max_depth": 10,
+            "scale_pos_weight": 1.731993941811405
+          },
+          "state": "COMPLETE"
+        },
+        {
+          "number": 1,
+          "cv_roc_auc": 0.9781142567348263,
+          "parameters": {
+            "learning_rate": 0.07661100707771368,
+            "max_depth": 4,
+            "scale_pos_weight": 1.1559945203362028
+          },
+          "state": "COMPLETE"
+        },
+        {
+          "number": 2,
+          "cv_roc_auc": 0.9757865506329114,
+          "parameters": {
+            "learning_rate": 0.012184186502221764,
+            "max_depth": 9,
+            "scale_pos_weight": 1.6011150117432087
+          },
+          "state": "COMPLETE"
+        },
+        {
+          "number": 3,
+          "cv_roc_auc": 0.9778692226549822,
+          "parameters": {
+            "learning_rate": 0.11114989443094977,
+            "max_depth": 3,
+            "scale_pos_weight": 1.9699098521619942
+          },
+          "state": "COMPLETE"
+        },
+        {
+          "number": 4,
+          "cv_roc_auc": 0.9777941983122365,
+          "parameters": {
+            "learning_rate": 0.1696753360719655,
+            "max_depth": 4,
+            "scale_pos_weight": 1.1818249672071006
+          },
+          "state": "COMPLETE"
+        },
+        {
+          "number": 5,
+          "cv_roc_auc": 0.9772631450827653,
+          "parameters": {
+            "learning_rate": 0.018659959624904923,
+            "max_depth": 5,
+            "scale_pos_weight": 1.524756431632238
+          },
+          "state": "COMPLETE"
+        },
+        {
+          "number": 6,
+          "cv_roc_auc": 0.9790266715352158,
+          "parameters": {
+            "learning_rate": 0.04345454109729477,
+            "max_depth": 5,
+            "scale_pos_weight": 1.6118528947223796
+          },
+          "state": "COMPLETE"
+        },
+        {
+          "number": 7,
+          "cv_roc_auc": 0.9768930501460564,
+          "parameters": {
+            "learning_rate": 0.01607123851203988,
+            "max_depth": 5,
+            "scale_pos_weight": 1.3663618432936917
+          },
+          "state": "COMPLETE"
+        },
+        {
+          "number": 8,
+          "cv_roc_auc": 0.9802765741642325,
+          "parameters": {
+            "learning_rate": 0.04717052037625178,
+            "max_depth": 9,
+            "scale_pos_weight": 1.1996737821583596
+          },
+          "state": "COMPLETE"
+        },
+        {
+          "number": 9,
+          "cv_roc_auc": 0.9795336011035378,
+          "parameters": {
+            "learning_rate": 0.05748924681991978,
+            "max_depth": 7,
+            "scale_pos_weight": 1.0464504127199978
+          },
+          "state": "COMPLETE"
+        }
+      ],
+      "training_majority_cap": 20000,
+      "training_selection": "all fraud training rows; bounded deterministic legitimate training rows",
+      "package_versions": {
+        "numpy": "2.3.4",
+        "pandas": "2.3.3",
+        "scikit-learn": "1.6.1",
+        "imbalanced-learn": "0.14.0",
+        "xgboost": "2.1.4"
+      },
+      "dataset_sha256": "2f9cec6e0d657d30c23eb59750d7976a3498d1c2b8899a5800758c51184d2292",
+      "probability_calibration": "not validated",
+      "evaluation_scope": "random stratified holdout",
+      "quality_scope": "held-out benchmark only; production performance and calibration unverified"
+    },
+    "engineered": {
+      "roc_auc": 0.977509621955141,
+      "average_precision": 0.7470544562970319,
+      "precision": 0.21515892420537897,
+      "recall": 0.8979591836734694,
+      "f1": 0.34714003944773175,
+      "confusion_matrix": [
+        [
+          56543,
+          321
+        ],
+        [
+          10,
+          88
+        ]
+      ],
+      "train_rows": 20394,
+      "test_rows": 56962,
+      "random_state": 42,
+      "cv_folds": 5,
+      "cv_roc_auc_mean": 0.9778481296656929,
+      "cv_roc_auc_std": 0.009209897815875839,
+      "feature_engineering": true,
+      "model_feature_names": [
+        "Time",
+        "logAmount",
+        "PC1",
+        "PC2",
+        "PC3",
+        "PC4",
+        "PC5",
+        "PC6",
+        "PC7",
+        "PC8",
+        "PC9",
+        "PC10"
+      ],
+      "model_parameters": {
+        "n_estimators": 100,
+        "learning_rate": 0.03574712922600244,
+        "max_depth": 10,
+        "n_jobs": 1,
+        "scale_pos_weight": 1.731993941811405
+      },
+      "optuna_best_trial": 0,
+      "optuna_best_cv_roc_auc": 0.9778481296656929,
+      "optuna_trials": [
+        {
+          "number": 0,
+          "cv_roc_auc": 0.9778481296656929,
+          "parameters": {
+            "learning_rate": 0.03574712922600244,
+            "max_depth": 10,
+            "scale_pos_weight": 1.731993941811405
+          },
+          "state": "COMPLETE"
+        }
+      ],
+      "training_majority_cap": 20000,
+      "training_selection": "all fraud training rows; bounded deterministic legitimate training rows",
+      "package_versions": {
+        "numpy": "2.3.4",
+        "pandas": "2.3.3",
+        "scikit-learn": "1.6.1",
+        "imbalanced-learn": "0.14.0",
+        "xgboost": "2.1.4"
+      },
+      "dataset_sha256": "2f9cec6e0d657d30c23eb59750d7976a3498d1c2b8899a5800758c51184d2292",
+      "probability_calibration": "not validated",
+      "evaluation_scope": "random stratified holdout",
+      "quality_scope": "held-out benchmark only; production performance and calibration unverified"
+    }
+  }
+}

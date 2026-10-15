@@ -1,0 +1,14 @@
+# CI-only complete synthetic model bundle; never a production model promotion.
+services:
+  api:
+    image: fraud-training:ci
+    environment:
+      MODEL_DIR: /app/test-model
+    volumes:
+      - ./reports/runtime/trained:/app/test-model:ro
+  xai-worker:
+    image: fraud-training:ci
+    environment:
+      MODEL_DIR: /app/test-model
+    volumes:
+      - ./reports/runtime/trained:/app/test-model:ro

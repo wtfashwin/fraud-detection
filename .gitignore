@@ -189,3 +189,7 @@ models/*.pkl
 models/trained/
 models/preprocessed/
 data/*.metadata.json
+data/benchmark/
+models/benchmark*/
+models/*/
+reports/runtime/

@@ -9,3 +9,5 @@ matplotlib==3.10.7
 seaborn==0.13.2
 httpx==0.28.1
 pytest==8.4.2
+optuna==4.5.0
+optuna-integration[mlflow]==4.5.0

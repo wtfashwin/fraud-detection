@@ -13,8 +13,12 @@ data
 plots
 tests
 docs
-models/trained
-models/preprocessed
+models/*
+!models/README.md
+!models/columns.joblib
+!models/feature_names.json
+!models/logistic_model.joblib
+!models/scaler.joblib
 web/tests
 archive
 **/*.log
