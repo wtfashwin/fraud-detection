@@ -1,36 +1,66 @@
-# Fraud Detection API
+# Fraud Detection
 
-A small FastAPI demo for scoring 30 ordered credit-card features, with asynchronous explanations persisted by a Celery worker. PostgreSQL stores explanation state; Redis carries tasks. The browser demo uses the real API.
+**Score a transaction, get its model probability, and retrieve the worker's saved explanation.**
 
-The bundled model is a demonstration artifact. Its training data and held-out fraud performance have not been established. The checked-in `archive/data/credit_approval.csv` is a different credit-approval dataset and is not suitable for evaluating this fraud model. Synthetic data checks software behavior, not fraud accuracy.
+A FastAPI application with a browser demo, a Celery worker, PostgreSQL, and Redis. It also includes XGBoost training, benchmark experiments, and optional input-drift monitoring.
 
-## Repository layout
+## What it does
 
-```text
-api/         HTTP endpoints, inference, queue, and worker
-db/         Shared database models and connections
-training/    Model training, preprocessing, evaluation, single-row prediction
-web/         Browser demo and JavaScript tests
-scripts/     Data generation, migrations, validation, and HTTP smoke checks
-tests/       Python regression tests
-models/      Canonical bundled demo artifacts; trained outputs are separate
-charts/      Optional Helm deployment example and render checks
-monitoring/  Optional Prometheus configuration and monitoring references
-notebooks/   Executed benchmark EDA with aggregate plots
-docs/        Current operating notes
-archive/     Earlier experiments, raw manifests, and incompatible sample data
+| Need | How it works |
+| --- | --- |
+| Score a transaction | Accepts 30 ordered numeric features and returns a prediction and class-1 probability. |
+| Inspect the result | The browser demo calls the real API and shows the response and explanation status. |
+| Explain a prediction | Celery computes the explanation in the background; PostgreSQL keeps its state and result. |
+| Train and compare models | Separate pipelines support scaling, SMOTE, optional feature engineering, Optuna tuning, and held-out evaluation. |
+| Watch input changes | Trained bundles can supply a reference for KS drift checks, Prometheus metrics, and a local Grafana alert. |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Client[Browser or HTTP client] <--> API[FastAPI: validate and score]
+    API --> Queue[Redis: task queue]
+    Queue --> Worker[Celery: calculate explanation]
+    API <--> DB[(PostgreSQL: explanation state)]
+    Worker --> DB
 ```
 
-`docker-compose.yml`, `Dockerfile`, dependency files, and project instructions stay at the root. `xai_tasks.py` is a small compatibility entry point; new workers use `api.worker.app`.
+The API returns the prediction after saving a pending record and dispatching the task. The worker saves the explanation; the client retrieves it through the API. API and worker load the same model and preprocessing bundle. A queued task is not a completed explanation.
 
-## Run locally
+Training runs separately and writes new bundles without replacing the packaged model. Monitoring is optional and does not block scoring.
+
+## Status
+
+This is a prototype. The [bundled logistic model](models/README.md) has unknown training provenance, calibration, and held-out fraud performance. The [recorded XGBoost benchmarks](#benchmarks) are separate experiments on a historical public dataset; their scores do not describe the bundled model.
+
+## Quick start
+
+Needs Docker with Compose v2 and Python 3 for the HTTP smoke check. The first build downloads images and packages. Run these commands from a fresh checkout:
 
 ```sh
+git clone https://github.com/wtfashwin/fraud-detection.git
+cd fraud-detection
 docker compose --env-file .env.example up --build -d --wait
 python3 scripts/smoke_test.py
 ```
 
-Open [the demo](http://127.0.0.1:8000/demo/) or [API docs](http://127.0.0.1:8000/docs). The core stack has four services: API, worker, PostgreSQL, and Redis. Ports bind to loopback. `.env.example` contains local demonstration credentials; use separate secrets and access controls before external deployment.
+Open the [browser demo](http://127.0.0.1:8000/demo/) or [API documentation](http://127.0.0.1:8000/docs). The smoke check sends a synthetic transaction, checks invalid input and duplicate IDs, and waits for a completed explanation. Success prints a JSON result with `"status": "PASS"`; it establishes request/worker behavior, not fraud accuracy.
+
+In the demo, choose **Fill synthetic example**, then **Score transaction**. Use **Check explanation** to retrieve the saved result. The synthetic example has no expected fraud outcome.
+
+### Local configuration
+
+[`.env.example`](.env.example) supplies demonstration values directly to Compose; no shell export is needed for the commands above.
+
+| Variable | Purpose |
+| --- | --- |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | Local database credentials and database name. |
+| `API_PORT` | Host API port; defaults to `8000`. |
+| `FRAUD_IMAGE` | API and worker image; defaults to the locally built `fraud-api:local`. |
+
+Compose connects API and worker to PostgreSQL and Redis internally. The API port binds to loopback. If you change `API_PORT`, use that port in the browser and in the smoke check's `--url` argument.
+
+Check services or stop the stack from the repository root:
 
 ```sh
 docker compose --env-file .env.example ps
@@ -38,57 +68,57 @@ docker compose --env-file .env.example logs --tail 100 api xai-worker
 docker compose --env-file .env.example down
 ```
 
-`down` keeps local data volumes. Add `-v` only when deliberately discarding local demonstration records.
+`down` keeps data volumes. Add `-v` only when you intend to discard local demo records.
 
-## Run a published image
+## API
 
-[Build 38635117727](https://github.com/wtfashwin/fraud-detection/actions/runs/38635117727) published the image tag `b6612a8b888c7706e9c926db1956e103acd04ed3` for Linux amd64 and arm64. Use the Compose file from that same commit. The command below pins the verified image digest.
+Features must be finite numbers in this order: `Time`, `V1` through `V28`, `Amount`. Do not include the `Class` label. `GET /model-info` returns the input order and explanation feature names.
 
-Start with a fresh checkout:
-
-```sh
-git clone https://github.com/wtfashwin/fraud-detection.git fraud-detection-release
-cd fraud-detection-release
-git checkout --detach b6612a8b888c7706e9c926db1956e103acd04ed3
-FRAUD_IMAGE=ghcr.io/wtfashwin/fraud-api@sha256:7b204316bd0f0a6e6dca0168c66edbb036dea4b8299678526bbb9bf66d1c90dd \
-  docker compose --env-file .env.example up -d --no-build --wait
-python3 scripts/smoke_test.py
-```
-
-Compose starts the API and worker from the selected image, plus PostgreSQL and Redis. Open [the demo](http://127.0.0.1:8000/demo/) after the smoke check succeeds. [GHCR](https://github.com/wtfashwin/fraud-detection/pkgs/container/fraud-api) lists other published versions; use their matching source commit when selecting a different image.
-
-## API contract
-
-| Route | Behavior |
+| Route | Result |
 | --- | --- |
-| `GET /health` | Process liveness plus bounded input-drift status; drift does not stop scoring. |
 | `GET /status` | Process liveness. |
-| `GET /ready` | 200 only when the loaded model, migrated explanation table, and broker are usable; otherwise 503. |
-| `GET /model-info` | Ordered raw input names, explanation names, and model source. |
-| `POST /predict` | Validated raw numeric features; actual class-1 probability; a persisted explanation ID and successful queue dispatch. |
-| `GET /explain/{transaction_id}` | 202 while pending, 200 when complete, 503 when failed, 404 for an unknown ID. |
-| `GET /metrics` | API Prometheus metrics. |
+| `GET /health` | Process liveness and input-drift status. |
+| `GET /ready` | `200` when the model, migrated explanation table, and broker are usable; otherwise `503`. |
+| `GET /model-info` | Feature names, order, and model source. |
+| `POST /predict` | Prediction, probability, transaction ID, and queued explanation status. |
+| `GET /explain/{transaction_id}` | `202` pending, `200` completed, `503` failed, or `404` unknown. |
+| `GET /metrics` | Prometheus metrics. |
 
-Features must be finite numbers in this order: `Time`, `V1` through `V28`, `Amount`. `transaction_id` is optional; a server-generated UUID is the default. Reusing an ID returns 409 and does not overwrite the previous explanation. Queue/storage failure returns 503. A successful response means the task was dispatched; use `/explain` to confirm completion.
+Transaction IDs are optional; the server generates a UUID by default. Reusing one returns `409` without replacing the previous record. Storage or dispatch failure returns `503`. After a timeout, check the saved status before submitting the transaction again.
 
-Linear explanations use exact feature contributions in **log-odds relative to a zero reference in scaled feature space**. They are not percentage contributions or causal evidence. Tree explanations identify their method in the returned payload. The API and worker use the same saved preprocessing bundle.
-
-Deploy, predict, then query the saved explanation:
+To save responses from a complete request/worker check:
 
 ```sh
-curl -fsS http://127.0.0.1:8000/ready
 python3 scripts/smoke_test.py --url http://127.0.0.1:8000 \
   --features-csv tests/fixtures/synthetic_transaction.csv \
   --output reports/runtime/http-smoke.json
-# For any returned transaction_id:
-curl -fsS http://127.0.0.1:8000/explain/<transaction_id>
 ```
 
-The CSV fixture is explicitly synthetic. `--features-csv /path/to/compatible.csv` reads one supplied row in the model's declared order. The smoke check posts it to `/predict`, verifies the probability, waits for a completed explanation, and saves the actual HTTP responses. It checks runtime behavior rather than model quality.
+Linear explanations report contributions in log-odds relative to a zero reference in scaled feature space. They are not percentages or causal evidence. Tree explanations identify their method in the returned payload.
 
-## Development and evaluation
+## Repository layout
 
-Python 3.11 is the serving target. The default image installs `requirements-runtime.txt`; training and tests use the full requirements file:
+```text
+api/          HTTP endpoints, inference, task dispatch, worker, and drift checks
+db/           Shared database models and connections
+alembic/      Database migrations
+training/     Preprocessing, training, tuning, evaluation, and prediction
+web/          Browser demo and JavaScript tests; no frontend build required
+scripts/      Data download/generation, migrations, and HTTP smoke checks
+tests/        Python regressions and synthetic fixtures
+models/       Canonical demo bundle; new training outputs stay separate
+notebooks/    Executed benchmark EDA with aggregate plots
+monitoring/   Prometheus rules and Grafana provisioning
+charts/       Optional Helm deployment example
+docs/         Benchmark evidence, feature notes, and runbooks
+archive/      Earlier experiments, manifests, and incompatible sample data
+```
+
+`docker-compose.yml` starts the local stack. `xai_tasks.py` is a compatibility entry point; new workers use `api.worker.app`.
+
+## Testing and CI
+
+Use Python 3.11 for development and serving. JavaScript checks use Node.js 24 in CI. From the repository root:
 
 ```sh
 python3.11 -m venv .venv
@@ -98,58 +128,90 @@ python -m pytest -q
 node --test web/tests/*.test.mjs
 ```
 
-For a software-only training smoke test:
+The default image installs only `requirements-runtime.txt`. The full requirements add training, evaluation, and development tools. Helm checks and container checks are listed in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+The [Test and package workflow](.github/workflows/ci-cd.yml) runs on pull requests, code pushes to `main`, and manual dispatch. It checks Python and JavaScript regressions, synthetic training/registration, Helm and alert rules, and actual prediction/explanation requests on Linux amd64 and arm64. The amd64 job also checks shared Redis drift metrics and a firing local Grafana alert using a synthetic model bundle.
+
+After required jobs pass on `main`, packaging publishes commit-SHA and `latest` tags with provenance and an SBOM. Markdown-only and `docs/`-only pushes skip the workflow; pull requests still run it. Synthetic registration is marked as a throwaway smoke check. Packaging does not deploy a production system.
+
+## Benchmarks
+
+Recorded experiments use OpenML 42175 version 1: 284,807 historical transactions and 492 fraud labels. Both reserve the same stratified 20% holdout of 56,962 rows, including 98 fraud labels. Preprocessing and SMOTE are fitted only on training folds.
+
+| Experiment | Optuna trials | Holdout ROC AUC | Average precision |
+| --- | ---: | ---: | ---: |
+| Original 30 features, tuned XGBoost | 10 | 0.973709 | 0.746473 |
+| log1p(Amount), fitted PCA10, XGBoost | 1 | 0.977510 | 0.747054 |
+
+The search budgets and parameters differ, so this comparison does not establish that extra PCA improves the model. Neither experiment validates a current deployment cohort or calibrated probabilities. See [results, reproduction commands, and limits](docs/benchmark-results.md), [aggregate metrics and package versions](docs/benchmark-results.json), and the [EDA notebook](notebooks/feature_engineering.ipynb).
+
+## Limits and data handling
+
+- The demo scores transactions; it does not approve or block them. Authentication, production load, failover, calibration, and deployment-cohort performance need separate validation.
+- Synthetic fixtures check software behavior. The archived `credit_approval.csv` is a different dataset and cannot evaluate this fraud model.
+- Demo credentials and loopback ports are for local use. External deployment needs separate secrets and access controls. Keep real transactions, credentials, and generated model bundles out of Git.
+- The default model has no known training drift reference and reports `UNAVAILABLE`. Complete trained bundles can provide one; input drift alone does not prove worse fraud detection.
+- The Helm chart is an optional example. Archived manifests and recovery notes are references, not verified Kubernetes rollout or failover evidence.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and change rules. Keep patches focused, preserve data/model provenance, and label synthetic results clearly.
+
+## Reference
+
+### Published image
+
+[Build 38688109974](https://github.com/wtfashwin/fraud-detection/actions/runs/38688109974) published Linux amd64 and arm64 images for source commit `221e84fb22373fe01f710f309b98814a044329dd`. Use its matching Compose file and pin the image digest:
+
+```sh
+git clone https://github.com/wtfashwin/fraud-detection.git fraud-detection-release
+cd fraud-detection-release
+git checkout --detach 221e84fb22373fe01f710f309b98814a044329dd
+FRAUD_IMAGE=ghcr.io/wtfashwin/fraud-api@sha256:85428b19948fcc7791dc6ead5d22a4137ed3cafc84b9b9ed81892c126bd4bee4 \
+  docker compose --env-file .env.example up -d --no-build --wait
+python3 scripts/smoke_test.py
+```
+
+[GHCR](https://github.com/wtfashwin/fraud-detection/pkgs/container/fraud-api) lists published images. Match source and image when choosing another version; tags can move, while a digest identifies specific image content.
+
+### Training and evaluation
+
+For a software-only training check, after installing the development requirements:
 
 ```sh
 CI_SYNTHETIC_SAMPLES=500 python scripts/generate_synthetic_data.py
 DATA_CSV=data/creditcard.csv MODEL_OUTPUT_DIR=models/trained python -m training.train
 ```
 
-The generator writes metadata identifying the data as synthetic. Training splits raw data before fitting transforms and uses five stratified training folds. SMOTE targets a minority/majority ratio of 0.5 inside each training fold and is skipped if that target is already reached. Holdout and validation rows are never resampled. Metrics include ROC AUC, average precision, and threshold-based metrics. `DECISION_THRESHOLD` changes evaluation metrics only; API classification uses the saved estimator’s `predict` method. Synthetic labels do not establish a useful real-world model.
+Training splits raw data before fitting transforms. Five stratified training folds use SMOTE up to a minority/majority ratio of 0.5; it is skipped when that ratio is already reached. Validation and holdout rows are not resampled. `DECISION_THRESHOLD` changes evaluation metrics; API classification uses the saved estimator's `predict` method.
 
-Training writes a separate complete bundle to `models/trained/`; it does not replace the packaged logistic model or its scaler. Evaluate compatible held-out data explicitly. Do not train on the evaluation dataset:
+New bundles go to `models/trained/`. Evaluate on independently held-out data:
 
 ```sh
 EVAL_DATA_CSV=/path/to/heldout.csv MODEL_DIR=models/trained python -m training.evaluate
 python scripts/validate_auc.py --help
 ```
 
-MLflow logging is optional. Logged sklearn inference pipelines accept the original 30 columns and return both class probabilities, with an inferred signature, five-row CSV example, and training-only drift baseline. `pipeline.joblib` is authoritative for new bundles; SMOTE is excluded from serving artifacts. Set `MLFLOW_TRACKING_URI` to enable tracking. Production-mode registration requires explicit real-data provenance and a held-out ROC AUC above the configured threshold; this is a registration gate, not production approval.
+MLflow logging is optional for `training.train`; `training.tune` defaults to a local `mlruns` store. Set `MLFLOW_TRACKING_URI` to choose another store. New inference pipelines accept the raw 30 columns and exclude SMOTE from serving. Production-mode registration requires real-data provenance and held-out AUC above its configured threshold; this is a registration gate, not deployment approval.
 
-For MLflow/XGBoost serving, build with `--target training`, mount the complete bundle read-only, and set `MODEL_DIR` to its path. `MLFLOW_MODEL_URI` opts into loading a registered raw-input pipeline; the default API does not contact a registry at startup.
+For an XGBoost/MLflow serving bundle, build the optional image with `--target training`, mount the complete bundle read-only, and set `MODEL_DIR` to that path. `MLFLOW_MODEL_URI` explicitly enables a registered model; the default API does not contact a registry. Read the [model notes](models/README.md) and [feature-engineering guide](docs/feature-engineering.md) before changing artifacts.
 
-## Reproduce the real benchmark
-
-```sh
-python scripts/fetch_benchmark.py
-python -m training.tune --data data/benchmark/creditcard.csv \
-  --output models/benchmark-optuna --trials 10 --max-majority 20000 \
-  --estimators 100 --study-name benchmark-optuna-raw30-seed42 --require-target
-```
-
-The fixed OpenML download is checksum-verified and kept out of Git. Tuning searches learning rate, depth, and residual class weight using training-fold AUC. It reserves the full 20% stratified holdout first, retains all training fraud rows, and caps legitimate training rows for a bounded local experiment. `--feature-engineering` enables the separately fitted log-Amount/PCA10 experiment. V1–V28 already represent PCA-derived inputs, so extra PCA is optional.
-
-Both requested AUC targets passed on the historical public benchmark. See [the measured results and limits](docs/benchmark-results.md) and [the EDA notebook](notebooks/feature_engineering.ipynb). These separate experiment bundles do not replace the packaged demonstration model.
-
-## Input drift monitoring
-
-Complete trained bundles contain a reference of at most 512 raw training rows. Accepted requests enter a bounded shared Redis window; after at least 20 observations, `/health` reports per-feature KS statistics and p-values. `/metrics` exposes `fraud_drift_ks{feature="V1"}`. Missing references report `UNAVAILABLE`, rather than fabricated zero drift.
+### Monitoring and troubleshooting
 
 ```sh
 docker compose --env-file .env.example --profile monitoring up -d
 ```
 
-Prometheus and Grafana bind to loopback at ports 9090 and 3000. The provisioned local alert evaluates KS statistic >0.05 for 30 seconds. Follow [the drift runbook](docs/runbooks/PredictionDrift.md); this sensitive example threshold needs cohort-specific calibration. Input shift alone cannot establish degraded AUC. External Slack notifications were removed from scope.
+Prometheus and Grafana bind to loopback on ports `9090` and `3000`. With a complete trained reference and at least 20 live observations, `/health` reports per-feature KS statistics and `/metrics` exposes them. The local alert uses KS statistic >0.05 for 30 seconds; calibrate that example threshold for the intended cohort.
 
-## CI and packaging
+| Symptom | Check |
+| --- | --- |
+| `/ready` returns `503` | Read its dependency status, then inspect `compose ps` and API/worker logs. A database connection alone does not establish that migrations exist. |
+| Explanation stays pending | Check `xai-worker` health and logs. `/ready` checks the broker, not worker completion. |
+| Prediction returns `409` | Retrieve the existing explanation or submit a new transaction ID. |
+| Drift is `UNAVAILABLE` or `WARMING_UP` | Check the trained bundle's reference and sample count using the drift runbook. |
 
-Pull requests run Python regression tests, JavaScript tests, synthetic training smoke, and real container smoke on Linux amd64 and arm64. The container smoke requires a prediction and a completed asynchronous explanation, checks invalid input and duplicate IDs, and uploads actual HTTP responses. CI also exercises registration in a throwaway local `ci-smoke-*` namespace, explicitly marked synthetic and not production-approved. A failed check stops publication. All JavaScript-based actions use native Node 24 releases.
-
-Both architectures train an isolated synthetic bundle inside the optional image. The amd64 job then serves that bundle with shared Redis, Prometheus, and Grafana, requiring measured KS drift and a healthy managed alert in a real firing state. It uploads an aggregate receipt without raw records or credentials. This checks the monitoring path, not real fraud accuracy.
-
-After checks pass on `main`, the package job publishes immutable commit and `latest` tags with provenance and an SBOM. Pushes that change only Markdown or files under `docs/` skip this workflow; pull requests still run the full checks. A synthetic training artifact is uploaded separately and never substituted for the packaged model. The workflow publishes a package; it does not deploy a production system.
-
-The Helm chart under `charts/fraud-detection/` is an optional deployment example with an explicit image tag. Historical raw manifests under `archive/k8s/`, older observability files, and worker-recovery notes remain references. Kubernetes rollout, failover, authentication, production load, probability calibration, and performance on a current deployment cohort require separate validation.
+See the [drift runbook](docs/runbooks/PredictionDrift.md), [latency runbook](docs/runbooks/HighLatency.md), [browser notes](web/README.md), and [Helm chart](charts/fraud-detection/README.md). External Slack notifications are outside this implementation.
 
 ## License
 
