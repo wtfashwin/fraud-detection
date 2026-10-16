@@ -13,7 +13,11 @@ from pathlib import Path
 def csv_features(path, feature_names):
     """Read one explicitly supplied CSV row in the serving model's raw order."""
     with Path(path).open(newline='') as stream:
-        row = next(csv.DictReader(stream), None)
+        reader = csv.DictReader(stream)
+        headers = reader.fieldnames or []
+        if len(headers) != len(set(headers)):
+            raise ValueError('CSV column names must be unique; duplicate headers are not accepted')
+        row = next(reader, None)
     if row is None or any(name not in row for name in feature_names):
         raise ValueError('CSV needs a data row and every raw model feature')
     try:
