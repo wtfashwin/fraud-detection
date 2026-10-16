@@ -192,6 +192,8 @@ EVAL_DATA_CSV=/path/to/heldout.csv MODEL_DIR=models/trained python -m training.e
 python scripts/validate_auc.py --help
 ```
 
+Evaluation rejects a CSV whose SHA-256 matches the training-source hash in the local bundle's `metrics.json`, before loading or scoring the model or writing a report. A different hash does not prove independence: this check does not detect shared rows, changed file formatting, or earlier label use. Legacy bundles without provenance remain supported, with the check marked unavailable. Malformed associated metadata raises an error. Artifact path overrides (`MODEL_PATH`, `COLUMNS_PATH`, `SCALER_PATH`) or a nonempty `MLFLOW_MODEL_URI` make the check unavailable because local metadata may describe a different bundle. Reports record `training_source_check` and keep independence explicitly unverified.
+
 MLflow logging is optional for `training.train`; `training.tune` defaults to a local `mlruns` store. Set `MLFLOW_TRACKING_URI` to choose another store. New inference pipelines accept the raw 30 columns and exclude SMOTE from serving. Production-mode registration requires real-data provenance and held-out AUC above its configured threshold; this is a registration gate, not deployment approval.
 
 For an XGBoost/MLflow serving bundle, build the optional image with `--target training`, mount the complete bundle read-only, and set `MODEL_DIR` to that path. `MLFLOW_MODEL_URI` explicitly enables a registered model; the default API does not contact a registry. Read the [model notes](models/README.md) and [feature-engineering guide](docs/feature-engineering.md) before changing artifacts.
