@@ -15,12 +15,12 @@ from sklearn.metrics import (
 
 from training import PROJECT_ROOT
 from api.inference import artifact_path, load_bundle
+from training.provenance import artifact_overrides, check_training_rows
 
 
 def check_training_source(directory, dataset_sha256):
     """Reject known byte-identical source reuse; do not certify independence."""
-    if (any(name in os.environ for name in ("MODEL_PATH", "COLUMNS_PATH", "SCALER_PATH"))
-            or os.getenv("MLFLOW_MODEL_URI")):
+    if artifact_overrides():
         return {"training_source_check": "unavailable_artifact_overrides"}
     metadata_path = artifact_path(directory) / "metrics.json"
     if not metadata_path.exists():
@@ -76,9 +76,10 @@ def main():
     source = Path(source_path)
     source_bytes = source.read_bytes()
     dataset_sha256 = hashlib.sha256(source_bytes).hexdigest()
-    X_test, y_test = validate_dataset(pd.read_csv(io.BytesIO(source_bytes)))
+    X_test, y_test = validate_dataset(pd.read_csv(io.BytesIO(source_bytes), float_precision="round_trip"))
     directory = Path(os.getenv("MODEL_DIR", PROJECT_ROOT / "models"))
-    provenance = check_training_source(directory, dataset_sha256)
+    provenance = {**check_training_source(directory, dataset_sha256),
+                  **check_training_rows(directory, X_test)}
     bundle = load_bundle(directory)
     if list(bundle.columns) != list(X_test.columns):
         raise ValueError("Saved model feature order does not match canonical evaluation schema")

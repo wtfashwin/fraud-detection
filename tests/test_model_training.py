@@ -69,7 +69,7 @@ def test_training_writes_complete_isolated_bundle(tmp_path):
     result = train_and_evaluate(fixture_data(), n_splits=3, n_estimators=2)
     save_bundle(result, tmp_path)
     assert {"pipeline.joblib", "xgb_model.joblib", "scaler.joblib", "columns.joblib",
-            "feature_names.json", "metrics.json", "drift_baseline.json"} <= {p.name for p in tmp_path.iterdir()}
+            "feature_names.json", "metrics.json", "drift_baseline.json", "training_rows.json"} <= {p.name for p in tmp_path.iterdir()}
     assert joblib.load(tmp_path / "columns.joblib") == ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
     assert 0 <= result["metrics"]["average_precision"] <= 1
     assert result["metrics"]["test_rows"] == 24
@@ -246,6 +246,21 @@ def test_optuna_selection_keeps_holdout_outside_all_trials(tmp_path):
     assert 1 <= study.best_params["scale_pos_weight"] <= 2
     assert result["metrics"]["target_auc"] == 0.95
     assert result["metrics"]["target_met"] is False  # Unidentified synthetic fixtures are not real quality proof.
+    from training.train import save_bundle
+    import json
+    output = tmp_path / "tuned"
+    save_bundle(result, output)
+    manifest = json.loads((output / "training_rows.json").read_text())
+    assert manifest["row_count"] == 86
+    assert len(manifest["fingerprints"]) == 86
+    from training.provenance import check_training_rows
+    check = check_training_rows(output, holdout.drop(columns="Class"))
+    assert check["training_row_check"] == "no_exact_overlap"
+    with pytest.raises(ValueError, match="overlap.*training|training.*overlap"):
+        check_training_rows(output, frame.loc[result["training_indices"]].drop(columns="Class"))
+    excluded = frame.drop(index=result["training_indices"] + holdout.index.tolist())
+    assert len(excluded) == 42
+    assert check_training_rows(output, excluded.drop(columns="Class"))["training_row_check"] == "no_exact_overlap"
 
 
 def test_optional_feature_engineering_is_fitted_only_on_fold_training_rows():
@@ -296,3 +311,35 @@ def test_smoke_registration_cannot_use_production_namespace(tmp_path, monkeypatc
     result = train_and_evaluate(fixture_data(), n_estimators=2)
     with pytest.raises(ValueError, match="ci-smoke"):
         log_to_mlflow(result)
+
+
+def test_training_source_hash_describes_one_parsed_byte_snapshot(tmp_path, monkeypatch):
+    import hashlib
+    from training.train import load_training_source
+
+    source = tmp_path / "source.csv"
+    original = fixture_data().to_csv(index=False).encode()
+    source.write_bytes(original)
+    replacement = generate_synthetic_data(40, fraud_ratio=0.2, random_state=99).to_csv(index=False)
+    read_csv = pd.read_csv
+
+    def read_then_replace(*args, **kwargs):
+        frame = read_csv(*args, **kwargs)
+        source.write_text(replacement)
+        return frame
+
+    monkeypatch.setattr(pd, "read_csv", read_then_replace)
+    frame, metadata = load_training_source(source)
+    assert len(frame) == 120
+    assert metadata["dataset_sha256"] == hashlib.sha256(original).hexdigest()
+
+
+def test_training_source_csv_round_trip_preserves_fingerprint_values(tmp_path):
+    from training.train import load_training_source
+
+    original = fixture_data()
+    source = tmp_path / "source.csv"
+    original.to_csv(source, index=False)
+    frame, _ = load_training_source(source)
+    np.testing.assert_array_equal(frame.drop(columns="Class").to_numpy(),
+                                  original.drop(columns="Class").to_numpy())
