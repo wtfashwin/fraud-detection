@@ -1,5 +1,6 @@
 """Evaluate supplied fraud labels and scores; do not manufacture a test dataset."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -13,7 +14,33 @@ from sklearn.metrics import (
 
 
 from training import PROJECT_ROOT
-from api.inference import load_bundle
+from api.inference import artifact_path, load_bundle
+
+
+def check_training_source(directory, dataset_sha256):
+    """Reject known byte-identical source reuse; do not certify independence."""
+    if (any(name in os.environ for name in ("MODEL_PATH", "COLUMNS_PATH", "SCALER_PATH"))
+            or os.getenv("MLFLOW_MODEL_URI")):
+        return {"training_source_check": "unavailable_artifact_overrides"}
+    metadata_path = artifact_path(directory) / "metrics.json"
+    if not metadata_path.exists():
+        return {"training_source_check": "unavailable_missing_provenance"}
+    try:
+        metadata = json.loads(metadata_path.read_text())
+        if not isinstance(metadata, dict):
+            raise ValueError("expected a JSON object")
+        if "dataset_sha256" not in metadata:
+            return {"training_source_check": "unavailable_missing_provenance"}
+        training_hash = metadata["dataset_sha256"]
+        if (not isinstance(training_hash, str) or len(training_hash) != 64
+                or any(char not in "0123456789abcdefABCDEF" for char in training_hash)):
+            raise ValueError("dataset_sha256 must be a 64-character hexadecimal SHA-256")
+    except (ValueError, OSError, UnicodeError) as exc:
+        raise ValueError(f"Invalid training provenance at {metadata_path}: {exc}") from exc
+    training_hash = training_hash.lower()
+    if training_hash == dataset_sha256:
+        raise ValueError("Evaluation CSV matches the saved bundle's training-source SHA-256; supply independently held-out data")
+    return {"training_source_check": "different_hash", "training_dataset_sha256": training_hash}
 
 
 def evaluate_predictions(labels, probabilities, threshold=0.5):
@@ -47,8 +74,11 @@ def main():
     if not source_path:
         raise ValueError("Set EVAL_DATA_CSV to an independently held-out labelled CSV; independence cannot be inferred")
     source = Path(source_path)
-    X_test, y_test = validate_dataset(pd.read_csv(source))
+    source_bytes = source.read_bytes()
+    dataset_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    X_test, y_test = validate_dataset(pd.read_csv(io.BytesIO(source_bytes)))
     directory = Path(os.getenv("MODEL_DIR", PROJECT_ROOT / "models"))
+    provenance = check_training_source(directory, dataset_sha256)
     bundle = load_bundle(directory)
     if list(bundle.columns) != list(X_test.columns):
         raise ValueError("Saved model feature order does not match canonical evaluation schema")
@@ -73,7 +103,7 @@ def main():
     sidecar = source.with_suffix(".metadata.json")
     data_kind = json.loads(sidecar.read_text()).get("data_kind") if sidecar.exists() else None
     metrics.update({"data_kind": data_kind or os.getenv("EVAL_DATA_KIND", "unspecified"),
-                    "dataset_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                    "dataset_sha256": dataset_sha256, **provenance,
                     "evaluation_scope": "provided evaluation CSV; independence not verified"})
     output = Path(os.getenv("EVALUATION_OUTPUT_DIR", PROJECT_ROOT / "plots/evaluation"))
     output.mkdir(parents=True, exist_ok=True)
