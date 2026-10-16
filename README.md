@@ -192,7 +192,13 @@ EVAL_DATA_CSV=/path/to/heldout.csv MODEL_DIR=models/trained python -m training.e
 python scripts/validate_auc.py --help
 ```
 
-Evaluation rejects a CSV whose SHA-256 matches the training-source hash in the local bundle's `metrics.json`, before loading or scoring the model or writing a report. A different hash does not prove independence: this check does not detect shared rows, changed file formatting, or earlier label use. Legacy bundles without provenance remain supported, with the check marked unavailable. Malformed associated metadata raises an error. Artifact path overrides (`MODEL_PATH`, `COLUMNS_PATH`, `SCALER_PATH`) or a nonempty `MLFLOW_MODEL_URI` make the check unavailable because local metadata may describe a different bundle. Reports record `training_source_check` and keep independence explicitly unverified.
+Evaluation rejects a CSV whose SHA-256 matches the training-source hash in the local bundle's `metrics.json`, before loading or scoring the model or writing a report.
+
+New training and tuning bundles also save `training_rows.json`, containing fingerprints of the actual fitted partition's 30 raw numeric features. Evaluation rejects exact feature-row overlap, including reordered rows, subsets, changed labels, or formatting changes that preserve numeric values. Labels are excluded from the fingerprint; signed zero is normalized. An internal holdout can pass when its inputs do not duplicate fitted rows. This check uses the actual training selection after any tuning sample cap.
+
+`metrics.json` binds the row manifest and saved `pipeline.joblib` by SHA-256. Declared missing or altered files, a replaced pipeline, and malformed associated metadata raise an error. Legacy bundles without declared row provenance remain supported, with the row check marked unavailable. Artifact path overrides (`MODEL_PATH`, `COLUMNS_PATH`, `SCALER_PATH`) or a nonempty `MLFLOW_MODEL_URI` make both checks unavailable because local metadata may describe a different bundle. Reports record `training_source_check` and `training_row_check`.
+
+A different file hash or `no_exact_overlap` result does not prove independence. Changed numeric values, approximate duplicates, earlier label use, and provenance authenticity need separate checks. These digests catch inconsistent local files; they are not proof against deliberate tampering. Keep generated row manifests private with their model bundles and out of Git. Evaluation reports keep independence explicitly unverified.
 
 MLflow logging is optional for `training.train`; `training.tune` defaults to a local `mlruns` store. Set `MLFLOW_TRACKING_URI` to choose another store. New inference pipelines accept the raw 30 columns and exclude SMOTE from serving. Production-mode registration requires real-data provenance and held-out AUC above its configured threshold; this is a registration gate, not deployment approval.
 

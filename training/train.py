@@ -1,5 +1,6 @@
 """Train isolated fraud bundles with untouched holdouts and honest provenance."""
 import hashlib
+import io
 from importlib.metadata import version
 import json
 import os
@@ -16,6 +17,7 @@ from xgboost import XGBClassifier, __version__ as xgboost_version, config_contex
 
 from training import PROJECT_ROOT
 from training.preprocess import FEATURE_NAMES, make_smote, validate_dataset
+from training.provenance import save_training_rows, training_row_manifest
 
 
 def fit_training_fold(features, labels, random_state=42, n_estimators=100,
@@ -84,7 +86,7 @@ def fit_and_evaluate_partition(X_train, X_test, y_train, y_test, n_splits=5,
     })
     return {"pipeline": pipeline, "metrics": metrics, "features": FEATURE_NAMES.copy(),
             "input_example": X_test.iloc[:5].copy(), "drift_baseline": baseline,
-            "training_indices": X_train.index.tolist()}
+            "training_indices": X_train.index.tolist(), "training_rows": training_row_manifest(X_train)}
 
 
 def train_and_evaluate(frame, n_splits=5, random_state=42, n_estimators=100, threshold=0.5,
@@ -110,6 +112,7 @@ def save_bundle(result, directory):
     joblib.dump(pipeline.named_steps["scaler"], directory / "scaler.joblib")
     joblib.dump(result["features"], directory / "columns.joblib")
     (directory / "feature_names.json").write_text(json.dumps(result["features"]) + "\n")
+    result["metrics"].update(save_training_rows(directory, result["training_rows"]))
     (directory / "metrics.json").write_text(json.dumps(result["metrics"], indent=2, allow_nan=False) + "\n")
     (directory / "drift_baseline.json").write_text(json.dumps(result["drift_baseline"], indent=2, allow_nan=False) + "\n")
 
@@ -168,10 +171,11 @@ def log_to_mlflow(result, tracking_uri=None, experiment_name=None):
 
 def load_training_source(source):
     source = Path(source)
+    source_bytes = source.read_bytes()
     provenance = source.with_suffix(".metadata.json")
     sidecar = json.loads(provenance.read_text()) if provenance.exists() else {}
-    return pd.read_csv(source), {"data_kind": sidecar.get("data_kind") or sidecar.get("kind") or os.getenv("DATA_KIND", "unspecified"),
-                                 "dataset_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+    return pd.read_csv(io.BytesIO(source_bytes), float_precision="round_trip"), {"data_kind": sidecar.get("data_kind") or sidecar.get("kind") or os.getenv("DATA_KIND", "unspecified"),
+                                 "dataset_sha256": hashlib.sha256(source_bytes).hexdigest(),
                                  "dataset_path": str(source), "dataset_source": sidecar.get("source_url", sidecar.get("source", "unspecified"))}
 
 
