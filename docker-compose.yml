@@ -51,6 +51,8 @@ services:
   xai-worker:
     <<: *app
     command: [celery, -A, api.worker.app, worker, --loglevel=info, --concurrency=1]
+    # Allow the Celery prefork worker to finish its warm shutdown.
+    stop_grace_period: 30s
     environment:
       <<: *app-env
       RUN_MIGRATIONS: '0'
