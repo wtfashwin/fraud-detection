@@ -1,12 +1,13 @@
 """Canonical Celery task: identical preprocessing and shared explanation persistence."""
 from functools import lru_cache
+from hashlib import sha256
 import logging
 import os
 
 from celery.signals import worker_ready
 from celery.exceptions import Retry
 from prometheus_client import Counter, Histogram, start_http_server
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 
 from api.inference import load_bundle
 from api.queue import celery_app
@@ -23,6 +24,11 @@ task_failure = Counter("xai_task_failures_total", "Failed explanation task attem
 @lru_cache(maxsize=1)
 def get_bundle():
     return load_bundle()
+
+
+def _explanation_lock_key(transaction_id: str) -> int:
+    digest = sha256(f"fraud-xai\0{transaction_id}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
 
 @worker_ready.connect
@@ -49,19 +55,27 @@ def persist_failure(transaction_id):
 def compute_shap(self, transaction_id: str, features: list, correlation_id: str | None = None):
     try:
         with engine.connect() as connection:
-            row = connection.execute(select(Explanation.status).where(
-                Explanation.transaction_id == transaction_id)).first()
-        if row is None:
-            raise ValueError("No persisted transaction exists for explanation task")
-        if row.status == "COMPLETED":
-            return {"transaction_id": transaction_id, "status": "COMPLETED"}
-        with task_duration.time():
-            bundle = get_bundle()
-            values, base_value, method = bundle.explain(features)
-            with engine.begin() as connection:
-                connection.execute(update(Explanation).where(Explanation.transaction_id == transaction_id)
-                                   .values(status="COMPLETED", shap_values=values, feature_names=bundle.explanation_columns,
-                                           base_value=base_value, explanation_method=method))
+            if connection.dialect.name == "postgresql":
+                # The read after waiting must see the previous owner's commit.
+                connection = connection.execution_options(isolation_level="READ COMMITTED")
+            with connection.begin():
+                if connection.dialect.name == "postgresql":
+                    # Workers share ownership without blocking API status updates.
+                    # A hash collision waits, then processes its own transaction ID.
+                    connection.execute(text("SELECT pg_advisory_xact_lock(:key)"),
+                                       {"key": _explanation_lock_key(transaction_id)})
+                row = connection.execute(select(Explanation.status).where(
+                    Explanation.transaction_id == transaction_id)).first()
+                if row is None:
+                    raise ValueError("No persisted transaction exists for explanation task")
+                if row.status == "COMPLETED":
+                    return {"transaction_id": transaction_id, "status": "COMPLETED"}
+                with task_duration.time():
+                    bundle = get_bundle()
+                    values, base_value, method = bundle.explain(features)
+                    connection.execute(update(Explanation).where(Explanation.transaction_id == transaction_id)
+                                       .values(status="COMPLETED", shap_values=values, feature_names=bundle.explanation_columns,
+                                               base_value=base_value, explanation_method=method))
         task_success.inc()
         return {"transaction_id": transaction_id, "status": "COMPLETED"}
     except Exception as exc:
