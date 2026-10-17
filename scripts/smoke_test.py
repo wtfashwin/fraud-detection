@@ -1,13 +1,32 @@
 """Exercise the real HTTP API and queued explanation; no fraud-quality claims."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import csv
 import json
 import math
+import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+
+HTTP_TIMEOUT = 10
+
+
+def json_body(response):
+    """A trickling body must not defeat the socket's inactivity timeout."""
+    deadline = time.monotonic() + HTTP_TIMEOUT
+    chunks = []
+    while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError('HTTP JSON response exceeded its body deadline')
+        chunk = response.read1(65536)
+        if time.monotonic() >= deadline:
+            raise TimeoutError('HTTP JSON response exceeded its body deadline')
+        if not chunk:
+            return json.loads(b''.join(chunks))
+        chunks.append(chunk)
 
 
 def csv_features(path, feature_names):
@@ -34,10 +53,27 @@ def request(base, path, payload=None):
     req = urllib.request.Request(base.rstrip('/') + path, data=data,
                                  headers={'Content-Type': 'application/json'})
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            return response.status, json.load(response)
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as response:
+            return response.status, json_body(response)
     except urllib.error.HTTPError as error:
-        return error.code, json.load(error)
+        with error:
+            return error.code, json_body(error)
+
+
+def concurrent_predictions(base, payload):
+    """Start two HTTP submissions together; server-side scheduling may vary."""
+    start = threading.Barrier(2, timeout=5)
+
+    def submit():
+        start.wait()
+        code, response = request(base, '/predict', payload)
+        return {'status_code': code, 'response': response}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(submit) for _ in range(2)]
+        # A future timeout cannot cancel a running HTTP request. Let its socket
+        # and JSON-body bounds finish, then close both worker threads cleanly.
+        return [future.result() for future in futures]
 
 
 def smoke(base, timeout=60, features_csv=None):
@@ -54,8 +90,10 @@ def smoke(base, timeout=60, features_csv=None):
     features = (csv_features(features_csv, info['feature_names']) if features_csv else
                 [100.0 if name == 'Amount' else 0.0 for name in info['feature_names']])
     transaction_id = 'smoke-' + str(uuid.uuid4())
-    code, result = request(base, '/predict', {'features': features, 'transaction_id': transaction_id})
-    assert code == 200, (code, result)
+    attempts = concurrent_predictions(base, {'features': features, 'transaction_id': transaction_id})
+    assert sorted(item['status_code'] for item in attempts) == [200, 409], attempts
+    result = next(item['response'] for item in attempts if item['status_code'] == 200)
+    assert result['transaction_id'] == transaction_id, result
     assert result['prediction'] in (0, 1)
     assert math.isfinite(result['score']) and 0 <= result['score'] <= 1
     assert result['explanation_status'] == 'Calculation queued'
@@ -67,6 +105,7 @@ def smoke(base, timeout=60, features_csv=None):
     while True:
         code, explanation = request(base, '/explain/' + transaction_id)
         if code == 200:
+            assert explanation['transaction_id'] == transaction_id, explanation
             assert explanation['status'] == 'COMPLETED', explanation
             expected_names = info.get('explanation_feature_names', info['feature_names'])
             assert explanation['feature_names'] == expected_names
@@ -81,6 +120,7 @@ def smoke(base, timeout=60, features_csv=None):
             'input': 'provided CSV row' if features_csv else 'synthetic transport fixture',
             'transaction_id': transaction_id, 'feature_count': len(features),
             'score': result['score'], 'prediction_response': result,
+            'concurrent_prediction_responses': attempts,
             'explanation_response': explanation}
 
 

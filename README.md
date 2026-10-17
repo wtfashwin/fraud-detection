@@ -44,7 +44,7 @@ docker compose --env-file .env.example up --build -d --wait
 python3 scripts/smoke_test.py
 ```
 
-Open the [browser demo](http://127.0.0.1:8000/demo/) or [API documentation](http://127.0.0.1:8000/docs). The smoke check sends a synthetic transaction, checks invalid input and duplicate IDs, and waits for a completed explanation. Success prints a JSON result with `"status": "PASS"`; it establishes request/worker behavior, not fraud accuracy.
+Open the [browser demo](http://127.0.0.1:8000/demo/) or [API documentation](http://127.0.0.1:8000/docs). The smoke check submits two concurrent requests with the same synthetic transaction ID, requires one acceptance and one conflict, checks a later duplicate and invalid input, and waits for a completed explanation. The JSON receipt saves both concurrent responses. Success prints `"status": "PASS"`; it establishes observed HTTP outcomes and worker completion, not exactly-once queue delivery or fraud accuracy.
 
 In the demo, choose **Fill synthetic example**, then **Score transaction**. Use **Check explanation** to retrieve the saved result. The synthetic example has no expected fraud outcome.
 
