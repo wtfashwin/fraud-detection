@@ -103,7 +103,12 @@ def smoke(base, timeout=60, features_csv=None):
     assert code == 422, (code, invalid)
     deadline = time.monotonic() + timeout
     while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Explanation did not complete before the smoke deadline')
         code, explanation = request(base, '/explain/' + transaction_id)
+        # HTTP reads have their own bounds; a late success is still a missed deadline.
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Explanation did not complete before the smoke deadline')
         if code == 200:
             assert explanation['transaction_id'] == transaction_id, explanation
             assert explanation['status'] == 'COMPLETED', explanation
@@ -113,9 +118,10 @@ def smoke(base, timeout=60, features_csv=None):
             assert all(math.isfinite(v) for v in explanation['shap_values'])
             break
         assert code == 202, (code, explanation)
-        if time.monotonic() >= deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             raise TimeoutError('Explanation did not complete before the smoke deadline')
-        time.sleep(1)
+        time.sleep(min(1, remaining))
     return {'status': 'PASS',
             'input': 'provided CSV row' if features_csv else 'synthetic transport fixture',
             'transaction_id': transaction_id, 'feature_count': len(features),
