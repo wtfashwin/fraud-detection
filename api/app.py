@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from api.inference import load_bundle, InvalidFeatures
 from api.drift import DriftMonitor, DriftCollector
 from api.queue import celery_app, check_broker
+from api.middleware import PredictionBodyLimitMiddleware
 from db.db import engine
 from db.models import Explanation
 
@@ -42,6 +43,8 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Fraud Detection API", version="1.1.0", lifespan=lifespan)
+# Correlation middleware is registered below, so it also wraps body-limit errors.
+app.add_middleware(PredictionBodyLimitMiddleware)
 
 
 class TransactionIn(BaseModel):
