@@ -7,7 +7,7 @@ from typing import Annotated
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StrictFloat, StrictInt, field_validator
@@ -44,7 +44,7 @@ async def lifespan(app):
 
 app = FastAPI(title="Fraud Detection API", version="1.1.0", lifespan=lifespan)
 # Register before correlation so denied requests retain their request ID.
-app.add_middleware(DemoAccessGateMiddleware)
+app.add_middleware(DemoAccessGateMiddleware, app_state=app.state)
 
 
 class TransactionIn(BaseModel):
@@ -86,6 +86,16 @@ async def invalid_request(request, exc):
     # Nonfinite submitted values are not JSON serializable; omit rejected input values.
     errors = [{"loc": error["loc"], "msg": error["msg"], "type": error["type"]} for error in exc.errors()]
     return JSONResponse(status_code=422, content={"detail": errors})
+
+
+@app.exception_handler(Exception)
+async def unexpected_error(request: Request, exc: Exception):
+    # ServerErrorMiddleware is outside the gate, so its response needs the policy here.
+    headers = {}
+    if getattr(app.state, "demo_auth_mode", None) != "off":
+        headers["Cache-Control"] = "no-store"
+        headers["X-Correlation-ID"] = getattr(request.state, "correlation_id", None) or str(uuid.uuid4())
+    return PlainTextResponse("Internal Server Error", status_code=500, headers=headers)
 
 
 def get_drift_monitor():

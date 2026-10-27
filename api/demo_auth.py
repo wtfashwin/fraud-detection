@@ -7,6 +7,7 @@ import os
 from typing import Mapping
 
 from starlette.responses import JSONResponse
+from starlette.datastructures import State
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 
@@ -41,7 +42,7 @@ def load_demo_auth_config(environ: Mapping[str, str] | None = None) -> DemoAuthC
 
 
 class DemoAccessGateMiddleware:
-    def __init__(self, app: ASGIApp):
+    def __init__(self, app: ASGIApp, app_state: State | None = None):
         self.app = app
         try:
             self.config = load_demo_auth_config()
@@ -49,6 +50,9 @@ class DemoAccessGateMiddleware:
             # Lazy construction precedes Starlette's lifespan error handling.
             # Report an explicit startup failure so Uvicorn auto cannot ignore it.
             self.config = None
+        # The outer error handler needs the same validated mode, not credentials.
+        if app_state is not None:
+            app_state.demo_auth_mode = self.config.mode if self.config is not None else None
 
     def authenticated(self, scope: Scope) -> bool:
         values = [value for name, value in scope.get("headers", []) if name.lower() == b"authorization"]
