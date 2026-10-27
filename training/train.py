@@ -3,6 +3,8 @@ import hashlib
 import io
 from importlib.metadata import version
 import json
+import math
+from numbers import Real
 import os
 from pathlib import Path
 
@@ -140,8 +142,16 @@ def log_to_mlflow(result, tracking_uri=None, experiment_name=None):
                 raise ValueError("Smoke registration requires a ci-smoke-* namespace and throwaway local file tracking")
         elif mode != "production" or data_kind != "real":
             raise ValueError("Production model registration requires explicitly identified real evaluation data")
-        elif result["metrics"]["roc_auc"] <= float(os.getenv("MLFLOW_AUC_THRESHOLD", "0.95")):
-            raise ValueError("Held-out ROC AUC must exceed the configured production registration threshold")
+        else:
+            threshold = float(os.getenv("MLFLOW_AUC_THRESHOLD", "0.95"))
+            auc = result["metrics"]["roc_auc"]
+            if not np.isfinite(threshold) or not 0 <= threshold <= 1:
+                raise ValueError("Production registration threshold must be finite and between 0 and 1")
+            if (isinstance(auc, (bool, np.bool_)) or not isinstance(auc, Real)
+                    or not 0 <= auc <= 1 or not math.isfinite(auc)):
+                raise ValueError("Held-out ROC AUC must be a finite real scalar between 0 and 1")
+            if auc <= threshold:
+                raise ValueError("Held-out ROC AUC must exceed the configured production registration threshold")
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name or os.getenv("MLFLOW_EXPERIMENT", "fraud-detection"))
     example = result["input_example"]
