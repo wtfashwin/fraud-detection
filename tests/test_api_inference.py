@@ -56,16 +56,20 @@ def test_invalid_model_probability_is_not_replaced_with_half():
 
 def test_linear_explanation_tracks_positive_class_when_classes_reversed():
     from api.inference import InferenceBundle
+    from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
-    class ReversedLinearEstimator:
-        classes_ = np.array([1, 0])
-        coef_ = np.array([[2., -1.]])
-        intercept_ = np.array([0.5])
+    from scipy.special import expit
+    model = LogisticRegression(solver="liblinear").fit(
+        np.array([[-2., -1.], [-1., -2.], [1., 2.], [2., 1.]]), [0, 0, 1, 1])
+    # Reversing the labels preserves the real estimator's probability semantics.
+    model.classes_ = model.classes_[::-1].copy()
     scaler = StandardScaler().fit(np.array([[-1., -1.], [1., 1.]]))
-    bundle = InferenceBundle(ReversedLinearEstimator(), scaler, ["a", "b"])
+    bundle = InferenceBundle(model, scaler, ["a", "b"])
     values, base_value, method = bundle.explain([2., 1.])
-    assert values == [-4., 1.]
-    assert base_value == -0.5
+    assert values == pytest.approx(-np.array([2., 1.]) * model.coef_[0])
+    assert base_value == pytest.approx(-model.intercept_[0])
+    assert expit(sum(values) + base_value) == pytest.approx(bundle.score([2., 1.])[1])
+    assert method == "linear_log_odds_zero_reference"
 
 
 def test_registered_training_pipeline_skips_smote_during_explanation():

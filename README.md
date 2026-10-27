@@ -94,7 +94,7 @@ python3 scripts/smoke_test.py --url http://127.0.0.1:8000 \
   --output reports/runtime/http-smoke.json
 ```
 
-Linear explanations report contributions in log-odds relative to a zero reference in scaled feature space. They are not percentages or causal evidence. Tree explanations identify their method in the returned payload.
+Linear log odds explanations support built in binary `LogisticRegression`, `LogisticRegressionCV`, `SGDClassifier(loss="log_loss")` and `LinearDiscriminantAnalysis` estimators with dense coefficient matrices and labels 0 and 1. Binary multinomial logistic mode doubles the contributions and base value to match its probability link. Other coefficient based estimators, including SVC, SGD modified Huber and custom subclasses, can still score a valid bundle but explanation requests fail rather than report unverified log odds. Contributions use a zero reference in scaled feature space; they are not percentages or causal evidence. Tree explanations identify their method in the returned payload.
 
 ## Repository layout
 

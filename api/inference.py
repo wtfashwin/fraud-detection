@@ -6,6 +6,8 @@ import os
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV, SGDClassifier
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -98,10 +100,27 @@ class InferenceBundle:
                     raise ValueError("Unsupported inference preprocessing step")
             model = model.steps[-1][1]
         explanation_columns = self.explanation_columns
-        if hasattr(model, "coef_") and np.asarray(model.coef_).shape == (1, len(explanation_columns)):
+        if hasattr(model, "coef_"):
+            # A linear margin is not necessarily a probability logit.
+            factor = None
+            if type(model) in (LogisticRegression, LogisticRegressionCV):
+                mode = model.multi_class
+                if mode in {"auto", "deprecated", "ovr", "warn"}:
+                    factor = 1
+                elif mode == "multinomial":
+                    # Binary softmax uses [-margin, margin], hence twice the margin.
+                    factor = 2
+            elif (type(model) is SGDClassifier and model.loss == "log_loss"
+                  or type(model) is LinearDiscriminantAnalysis):
+                factor = 1
+            classes = np.asarray(getattr(model, "classes_", []))
+            if (factor is None or np.asarray(model.coef_).shape != (1, len(explanation_columns))
+                    or classes.shape != (2,) or set(classes) != {0, 1}
+                    or np.asarray(model.intercept_).size != 1):
+                raise ValueError("Linear log-odds explanations require a supported binary probability link")
             # Exact linear SHAP in log-odds relative to an explicit zero reference.
-            values = np.asarray(data)[0] * np.asarray(model.coef_)[0]
-            base_value = float(np.asarray(model.intercept_).reshape(-1)[0])
+            values = factor * np.asarray(data)[0] * np.asarray(model.coef_)[0]
+            base_value = factor * float(np.asarray(model.intercept_).reshape(-1)[0])
             if np.asarray(model.classes_)[1] != 1:
                 values = -values
                 base_value = -base_value
