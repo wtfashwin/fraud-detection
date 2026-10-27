@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from api.inference import load_bundle, InvalidFeatures
 from api.drift import DriftMonitor, DriftCollector
 from api.queue import celery_app, check_broker
+from api.demo_auth import DemoAccessGateMiddleware
 from db.db import engine
 from db.models import Explanation
 
@@ -42,6 +43,8 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Fraud Detection API", version="1.1.0", lifespan=lifespan)
+# Register before correlation so denied requests retain their request ID.
+app.add_middleware(DemoAccessGateMiddleware)
 
 
 class TransactionIn(BaseModel):
