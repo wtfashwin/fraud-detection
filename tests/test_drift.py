@@ -93,6 +93,41 @@ def test_two_monitors_share_bounded_window_instead_of_process_local_state():
     assert "auc" not in drift
 
 
+def test_existing_large_redis_list_reads_only_the_latest_window():
+    from api.drift import DriftMonitor
+
+    class TransferLimitedRedis(MemoryRedis):
+        def lrange(self, key, start, stop):
+            rows = super().lrange(key, start, stop)
+            if len(rows) > 20:
+                raise RuntimeError("Synthetic Redis transfer budget exceeded")
+            return rows
+
+    client = TransferLimitedRedis()
+    monitor = DriftMonitor(baseline(), client=client, max_samples=20, min_samples=20)
+    # Old corrupt entries must not be fetched or affect the latest valid window.
+    client.shared[monitor.key] = (
+        ["not-json"] * 1000
+        + [json.dumps([i, i * 2]) for i in range(20)]
+    )
+
+    report = monitor.report()
+    assert report["status"] == "OK"
+    assert report["samples"] == 20
+    assert report["features"]["V1"]["statistic"] == 0.0
+
+
+def test_invalid_entry_in_latest_window_reports_error():
+    from api.drift import DriftMonitor
+
+    client = MemoryRedis()
+    monitor = DriftMonitor(baseline(), client=client, max_samples=20, min_samples=20)
+    client.shared[monitor.key] = [json.dumps([i, i * 2]) for i in range(19)] + ["not-json"]
+    report = monitor.report()
+    assert report["status"] == "ERROR"
+    assert report["features"] == {}
+
+
 def test_insufficient_samples_are_warming_up():
     from api.drift import DriftMonitor
     monitor = DriftMonitor(baseline(), client=MemoryRedis(), min_samples=20)

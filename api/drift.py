@@ -120,9 +120,8 @@ class DriftMonitor:
             report["reason"] = "Training baseline has fewer than the required minimum samples"
             return report
         try:
-            observations = self._client().lrange(self.key, 0, -1)
-            # Redis trimming is transactional, but a config change can leave a larger old window.
-            observations = observations[-self.max_samples:]
+            # Limit the response at Redis, including when an older window is larger.
+            observations = self._client().lrange(self.key, -self.max_samples, -1)
             values = np.asarray([json.loads(row) for row in observations], dtype=float)
             report["samples"] = len(observations)
             if len(observations) < self.min_samples:
