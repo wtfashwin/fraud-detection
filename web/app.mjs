@@ -4,7 +4,9 @@ const element = (id) => document.getElementById(id);
 let modelInfo = null;
 let apiBase = '';
 let prediction = null;
+let requestContext = null;
 let busy = false;
+const validTransactionId = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
 
 function setMessage(id, message) {
   const node = element(id);
@@ -19,15 +21,20 @@ function updateControls() {
   element('sample-button').disabled = busy || !modelInfo;
   element('features').disabled = busy;
   element('transaction-id').disabled = busy;
-  element('explanation-button').disabled = busy || !prediction;
+  element('explanation-button').disabled = busy || !requestContext;
+  element('explanation-panel').hidden = !requestContext;
   element('result-panel').setAttribute('aria-busy', String(busy));
   element('score-button').textContent = busy ? 'Please wait…' : 'Score transaction';
 }
 
 function clearResult() {
   prediction = null;
+  requestContext = null;
   element('result').hidden = true;
   element('empty-result').hidden = false;
+  for (const id of ['prediction-label', 'probability', 'result-id', 'correlation-id', 'explanation-status', 'raw-response']) {
+    element(id).textContent = '';
+  }
   element('explanation-response').hidden = true;
   setMessage('explanation-message', '');
   setMessage('request-status', '');
@@ -113,19 +120,21 @@ element('transaction').addEventListener('submit', async (event) => {
   element('features').removeAttribute('aria-invalid');
   element('transaction-id').removeAttribute('aria-invalid');
   let payload;
+  const submittedBase = apiBase;
   let invalidField = 'features';
   try {
     const features = validateFeatures(element('features').value, modelInfo.feature_count);
     invalidField = 'transaction-id';
     let transactionId = element('transaction-id').value.trim();
-    if (transactionId && !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(transactionId)) {
-      throw new Error('Use 1–128 letters, numbers, dots, underscores, colons, or hyphens for the ID. Start with a letter or number.');
-    }
     if (!transactionId && globalThis.crypto?.randomUUID) {
       transactionId = crypto.randomUUID();
       element('transaction-id').value = transactionId;
     }
+    if (transactionId && !validTransactionId(transactionId)) {
+      throw new Error('Use 1–128 letters, numbers, dots, underscores, colons, or hyphens for the ID. Start with a letter or number.');
+    }
     payload = { features, ...(transactionId ? { transaction_id: transactionId } : {}) };
+    requestContext = transactionId ? { transactionId, apiBase: submittedBase } : null;
   } catch (error) {
     setMessage('input-error', error.message);
     element(invalidField).setAttribute('aria-invalid', 'true');
@@ -136,7 +145,10 @@ element('transaction').addEventListener('submit', async (event) => {
   updateControls();
   setMessage('request-status', 'Scoring with the connected API…');
   try {
-    prediction = validatePrediction(await fetchJson(`${apiBase}/predict`, { method: 'POST', body: JSON.stringify(payload) }));
+    prediction = validatePrediction(await fetchJson(`${submittedBase}/predict`, { method: 'POST', body: JSON.stringify(payload) }));
+    requestContext = validTransactionId(prediction.transaction_id)
+      ? { transactionId: prediction.transaction_id, apiBase: submittedBase }
+      : null;
     element('prediction-label').textContent = prediction.prediction === 1 ? 'Flagged as fraud · class 1' : 'Not flagged as fraud · class 0';
     element('prediction-label').dataset.fraud = String(prediction.prediction === 1);
     element('probability').textContent = formatProbability(prediction.score);
@@ -153,6 +165,9 @@ element('transaction').addEventListener('submit', async (event) => {
     prediction = null;
     setMessage('request-status', '');
     setMessage('input-error', `${error.message}${error.status === 409 ? ' Enter a new transaction ID before scoring again.' : ''}`);
+    setMessage('explanation-message', requestContext
+      ? `No prediction was received. Check saved status for ${requestContext.transactionId}; this does not confirm that it was saved.`
+      : '');
   } finally {
     busy = false;
     updateControls();
@@ -160,13 +175,14 @@ element('transaction').addEventListener('submit', async (event) => {
 });
 
 element('explanation-button').addEventListener('click', async () => {
-  if (!prediction || busy) return;
+  if (!requestContext || busy) return;
+  const lookup = requestContext;
   busy = true;
   updateControls();
   setMessage('explanation-message', 'Checking for a saved explanation…');
   element('explanation-response').hidden = true;
   try {
-    const explanation = await fetchJson(`${apiBase}/explain/${encodeURIComponent(prediction.transaction_id)}`);
+    const explanation = await fetchJson(`${lookup.apiBase}/explain/${encodeURIComponent(lookup.transactionId)}`);
     if (explanation.status === 'PENDING') {
       setMessage('explanation-message', 'The API reports this explanation is pending. Check again later.');
     } else {
