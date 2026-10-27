@@ -3,7 +3,7 @@ export function normalizeApiBase(value) {
   if (!trimmed) return '';
   let url;
   try { url = new URL(trimmed); } catch { throw new Error('Enter a full HTTP or HTTPS API URL, or leave it blank for this server.'); }
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href.includes('?') || url.href.includes('#')) {
     throw new Error('Use an HTTP or HTTPS URL without credentials, a query, or a fragment.');
   }
   return url.href.replace(/\/+$/, '');
