@@ -74,6 +74,8 @@ docker compose --env-file .env.example down
 
 Features must be finite numbers in this order: `Time`, `V1` through `V28`, `Amount`. Do not include the `Class` label. `GET /model-info` returns the input order and explanation feature names.
 
+For a saved or registered pipeline, `Amount` must also be nonnegative; a negative value receives HTTP `422`. A legacy model with a separate scaler can accept a finite negative `Amount`. Training and evaluation without the optional feature engineering step can also accept negative amounts, so their metrics may include rows that the pipeline API cannot score. Use nonnegative amounts when preparing data for a pipeline served through this API.
+
 | Route | Result |
 | --- | --- |
 | `GET /status` | Process liveness. |
