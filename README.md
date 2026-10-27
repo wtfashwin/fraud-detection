@@ -84,7 +84,7 @@ Features must be finite numbers in this order: `Time`, `V1` through `V28`, `Amou
 | `GET /explain/{transaction_id}` | `202` pending, `200` completed, `503` failed, or `404` unknown. |
 | `GET /metrics` | Prometheus metrics. |
 
-Transaction IDs are optional; the server generates a UUID by default. Reusing one returns `409` without replacing the previous record. Storage or dispatch failure returns `503`. After a timeout, check the saved status before submitting the transaction again.
+Transaction IDs are optional; the server generates a UUID by default. Reusing one returns `409` without replacing the previous record. Storage, dispatch, or an unrecognized saved explanation state returns `503`; an unrecognized state is reported as `UNAVAILABLE` without returning explanation values. After a timeout, check the saved status before submitting the transaction again.
 
 To save responses from a complete request/worker check:
 
