@@ -62,10 +62,12 @@ def prepare_data(frame, test_size=0.2, random_state=42):
 
 
 def main():
+    from training.csv_snapshot import read_checked_csv
+
     source = Path(os.getenv("DATA_CSV", PROJECT_ROOT / "data/creditcard.csv"))
     output = Path(os.getenv("PREPROCESSED_DATA_PATH", PROJECT_ROOT / "data/preprocessed_data.npz"))
     model_dir = Path(os.getenv("PREPROCESS_OUTPUT_DIR", PROJECT_ROOT / "models/preprocessed"))
-    result = prepare_data(pd.read_csv(source))
+    result = prepare_data(read_checked_csv(source))
     output.parent.mkdir(parents=True, exist_ok=True)
     model_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output, **{k: result[k] for k in ("X_res", "y_res", "X_test", "y_test")})

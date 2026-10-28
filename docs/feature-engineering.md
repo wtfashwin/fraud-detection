@@ -16,11 +16,15 @@ V1..V28 in the public anonymized credit-card benchmark are already PCA-derived. 
 
 ## Notebook
 
-`notebooks/feature_engineering.ipynb` requires `DATA_CSV` explicitly. It records the exact CSV path and SHA256, declared source kind, and row count, then plots observed class balance, raw/log amount distributions, and training-only PCA variance. The declared source label remains visible on every chart. Missing data produces an explicit error; no generated data is substituted.
+`notebooks/feature_engineering.ipynb` is the historical executed notebook. It preserves the saved benchmark outputs and execution metadata. Its loader parsed the CSV path and then reopened that path to hash it, so the recorded hash alone cannot prove the parsed bytes were identical if the file changed between reads. This review did not independently observe the original execution or establish whether a change occurred.
 
-The checked-in notebook was executed on the [OpenML 42175 version 1 public benchmark](https://www.openml.org/d/42175). It contains aggregate plots and summary counts only: 284,807 rows, 492 fraud labels, and a 227,845-row training partition. The 10 retained PCA components explain 64.766455% of V1..V28 variance in that training partition. This is representation evidence, not measured fraud-detection improvement.
+The historical notebook records a run labeled as the [OpenML 42175 version 1 public benchmark](https://www.openml.org/d/42175). Its saved aggregate outputs report 284,807 rows, 492 fraud labels, and a 227,845-row training partition. The 10 retained PCA components explain 64.766455% of V1..V28 variance in that recorded partition. This is representation evidence, not measured fraud-detection improvement.
 
-The CSV SHA256 is `2f9cec6e0d657d30c23eb59750d7976a3498d1c2b8899a5800758c51184d2292`. Aggregate figures are in `docs/figures/benchmark-class-balance.png`, `benchmark-amount-transform.png`, and `benchmark-pca-training-variance.png`. Raw benchmark rows are not copied into the notebook or documentation. Run using the notebook's setup command with the intended dataset to regenerate these results. Synthetic smoke runs check execution mechanics only and must remain labeled synthetic.
+The notebook recorded CSV SHA256 `2f9cec6e0d657d30c23eb59750d7976a3498d1c2b8899a5800758c51184d2292`. Its embedded aggregate figures match `docs/figures/benchmark-class-balance.png`, `benchmark-amount-transform.png`, and `benchmark-pca-training-variance.png`. Raw benchmark rows are not copied into the notebook or documentation.
+
+For future runs, use `notebooks/feature_engineering_verified.ipynb`. This copy is unexecuted and has no saved results. It requires `DATA_CSV`, reads one byte snapshot, checks a declared sidecar hash before parsing, and reports the hash of those same bytes. It retains pandas' filename-based compression inference and default parsing behavior. The input bytes are held in memory in addition to the parsed data. `DATA_KIND` takes precedence over a sidecar data kind; both are declarations, not proof of origin. Missing sidecars and sidecars without a hash remain supported without a sidecar hash check. A present sidecar must resolve to a regular file and requires `O_NONBLOCK`.
+
+Use the new notebook's setup command to write a separate run result. Its loader is tested with synthetic files; those tests do not reproduce the historical benchmark outputs or prove model quality. The saved historical notebook and figures are not modified by these tests.
 
 ## Transformer checks
 

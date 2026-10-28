@@ -13,14 +13,14 @@ def validate_auc(model_uri, threshold=0.95, data_path=None):
         raise ValueError("AUC threshold must be between 0 and 1")
     import mlflow
     import mlflow.sklearn
-    import pandas as pd
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from training.csv_snapshot import read_checked_csv
     from training.evaluate import evaluate_predictions
     from training.preprocess import validate_dataset
 
+    X, y = validate_dataset(read_checked_csv(data_path))
     if os.getenv("MLFLOW_TRACKING_URI"):
         mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-    X, y = validate_dataset(pd.read_csv(data_path))
     model = mlflow.sklearn.load_model(model_uri)
     if not hasattr(model, "named_steps") or "scaler" not in model.named_steps:
         raise ValueError("Validation requires a logged raw-input pipeline containing its fitted scaler")
