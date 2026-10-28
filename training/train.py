@@ -3,6 +3,8 @@ import hashlib
 import io
 from importlib.metadata import version
 import json
+import math
+from numbers import Real
 import os
 from pathlib import Path
 
@@ -134,14 +136,39 @@ def log_to_mlflow(result, tracking_uri=None, experiment_name=None):
     mode = os.getenv("MLFLOW_REGISTRATION_MODE", "production")
     model_name = os.getenv("MLFLOW_MODEL_NAME", "fraud-detection-model")
     data_kind = result["metrics"].get("data_kind", "unspecified")
+    metrics_for_logging = result["metrics"]
+    normalized_auc = None
     if register:
         if mode == "smoke":
             if not model_name.startswith("ci-smoke-") or not tracking_uri.startswith("file:"):
                 raise ValueError("Smoke registration requires a ci-smoke-* namespace and throwaway local file tracking")
         elif mode != "production" or data_kind != "real":
             raise ValueError("Production model registration requires explicitly identified real evaluation data")
-        elif result["metrics"]["roc_auc"] <= float(os.getenv("MLFLOW_AUC_THRESHOLD", "0.95")):
-            raise ValueError("Held-out ROC AUC must exceed the configured production registration threshold")
+        else:
+            threshold = float(os.getenv("MLFLOW_AUC_THRESHOLD", "0.95"))
+            auc = result["metrics"]["roc_auc"]
+            if not np.isfinite(threshold) or not 0 <= threshold <= 1:
+                raise ValueError("Production registration threshold must be finite and between 0 and 1")
+            if (isinstance(auc, (bool, np.bool_)) or not isinstance(auc, Real)
+                    or not 0 <= auc <= 1 or not math.isfinite(auc)):
+                raise ValueError("Held-out ROC AUC must be a finite real scalar between 0 and 1")
+            if auc <= threshold:
+                raise ValueError("Held-out ROC AUC must exceed the configured production registration threshold")
+            normalized_auc = float(auc)
+            if normalized_auc <= threshold:
+                raise ValueError("Held-out ROC AUC must exceed the threshold after conversion for MLflow")
+    if normalized_auc is None:
+        auc_for_logging = metrics_for_logging.get("roc_auc")
+        if not isinstance(auc_for_logging, (bool, np.bool_)) and isinstance(auc_for_logging, Real):
+            try:
+                if 0 <= auc_for_logging <= 1 and math.isfinite(auc_for_logging):
+                    normalized_auc = float(auc_for_logging)
+            except (TypeError, ValueError, OverflowError):
+                # Keep nonproduction behavior for inputs that cannot be normalized.
+                pass
+    if normalized_auc is not None:
+        # MLflow logs Python floats as scalar metrics and JSON numbers.
+        metrics_for_logging = {**metrics_for_logging, "roc_auc": normalized_auc}
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name or os.getenv("MLFLOW_EXPERIMENT", "fraud-detection"))
     example = result["input_example"]
@@ -151,8 +178,8 @@ def log_to_mlflow(result, tracking_uri=None, experiment_name=None):
         mlflow.log_params({"model_type": "XGBoost", "sampling": "training-fold-only SMOTE 0.5",
                            **result["metrics"]["model_parameters"], "random_state": result["metrics"]["random_state"],
                            "cv_folds": result["metrics"]["cv_folds"]})
-        mlflow.log_metrics({k: float(v) for k, v in result["metrics"].items() if isinstance(v, (int, float))})
-        mlflow.log_dict(result["metrics"], "evaluation/metrics.json")
+        mlflow.log_metrics({k: float(v) for k, v in metrics_for_logging.items() if isinstance(v, (int, float))})
+        mlflow.log_dict(metrics_for_logging, "evaluation/metrics.json")
         mlflow.log_dict(result["drift_baseline"], "drift/drift_baseline.json")
         mlflow.log_text(example.to_csv(index=False), "inputs/sample.csv")
         mlflow.set_tags({"data_kind": data_kind, "registration_mode": mode,
