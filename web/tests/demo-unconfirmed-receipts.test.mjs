@@ -123,7 +123,7 @@ if (typeof vm.SourceTextModule !== 'function') {
       await demo.reconnect();
       await demo.submit('shared-ID');
       assert.equal(demo.posts().length, 2);
-      rowFor(demo, 'shared-ID', 'this server');
+      rowFor(demo, 'shared-ID', 'https://page.invalid');
       rowFor(demo, 'shared-ID', otherApi);
       assert.equal(rows(demo).length, 2);
     }
@@ -139,7 +139,7 @@ if (typeof vm.SourceTextModule !== 'function') {
     await demo.submit('shared-ID');
     assert.equal(demo.posts().length, 2);
     rowFor(demo, 'shared-ID', 'https://redirect.invalid');
-    rowFor(demo, 'shared-ID', 'this server');
+    rowFor(demo, 'shared-ID', 'https://page.invalid');
     assert.equal(rows(demo).length, 2);
   });
 
@@ -147,10 +147,10 @@ if (typeof vm.SourceTextModule !== 'function') {
     const demo = await createDemo({ predictions: [unconfirmed(), unconfirmed()] });
     await demo.submit('unconfirmed-A');
     await demo.submit('unconfirmed-B');
-    const first = rowFor(demo, 'unconfirmed-A', 'this server');
+    const first = rowFor(demo, 'unconfirmed-A', 'https://page.invalid');
     await action(first, 'Remove from page');
     assert.equal(rows(demo).length, 1);
-    rowFor(demo, 'unconfirmed-B', 'this server');
+    rowFor(demo, 'unconfirmed-B', 'https://page.invalid');
     assert.equal(demo.posts().length, 2);
     assert.equal(demo.lookups().length, 0);
   });
@@ -158,7 +158,7 @@ if (typeof vm.SourceTextModule !== 'function') {
   test('a receipt never displays an explanation for a different ID', async () => {
     const demo = await createDemo({ predictions: [unconfirmed()], explanations: [{ data: { transaction_id: 'other-ID', status: 'COMPLETED', private_value: 919 } }] });
     await demo.submit('unconfirmed-A');
-    const row = rowFor(demo, 'unconfirmed-A', 'this server');
+    const row = rowFor(demo, 'unconfirmed-A', 'https://page.invalid');
     await action(row, 'Check original API');
     assert.match(status(row).textContent, /missing or different transaction ID/i);
     assert.ok(!row.children.some((child) => child.textContent.includes('919')));
@@ -192,7 +192,7 @@ if (typeof vm.SourceTextModule !== 'function') {
     await pending;
     assert.match(demo.node('input-error').textContent, /missing or different transaction ID/i);
     assert.doesNotMatch(demo.node('input-error').textContent, /Unrelated private detail/);
-    rowFor(demo, 'unconfirmed-A', 'this server');
+    rowFor(demo, 'unconfirmed-A', 'https://page.invalid');
     assert.equal(demo.posts().length, 1);
   });
 
@@ -226,11 +226,11 @@ if (typeof vm.SourceTextModule !== 'function') {
     await pending;
     assert.equal(demo.posts().length, 10);
     assert.equal(rows(demo).length, 10);
-    const row = rowFor(demo, 'unconfirmed-10', 'this server');
+    const row = rowFor(demo, 'unconfirmed-10', 'https://page.invalid');
     assert.ok(row.children.some((child) => /result.*not displayed.*input/i.test(child.textContent)));
     await demo.submit('unconfirmed-11');
     assert.equal(demo.posts().length, 10);
-    rowFor(demo, 'unconfirmed-1', 'this server');
+    rowFor(demo, 'unconfirmed-1', 'https://page.invalid');
   });
 
   test('the receipt limit blocks another distinct POST without evicting earlier IDs', async () => {
@@ -241,13 +241,13 @@ if (typeof vm.SourceTextModule !== 'function') {
     assert.equal(demo.posts().length, 10);
     assert.match(demo.node('input-error').textContent, /remove.*receipt|receipt.*limit/i);
     assert.equal(rows(demo).length, 10);
-    const first = rowFor(demo, 'unconfirmed-1', 'this server');
-    rowFor(demo, 'unconfirmed-10', 'this server');
+    const first = rowFor(demo, 'unconfirmed-1', 'https://page.invalid');
+    rowFor(demo, 'unconfirmed-10', 'https://page.invalid');
     await action(first, 'Remove from page');
     await demo.submit('unconfirmed-11');
     assert.equal(demo.posts().length, 11);
     assert.equal(rows(demo).length, 10);
-    rowFor(demo, 'unconfirmed-11', 'this server');
+    rowFor(demo, 'unconfirmed-11', 'https://page.invalid');
   });
 
   test('a late lookup response cannot recreate an explicitly removed receipt', async () => {
@@ -255,7 +255,7 @@ if (typeof vm.SourceTextModule !== 'function') {
     const deferred = new Promise((resolve) => { release = resolve; });
     const demo = await createDemo({ predictions: [unconfirmed()], explanations: [{ deferred }] });
     await demo.submit('unconfirmed-A');
-    const first = rowFor(demo, 'unconfirmed-A', 'this server');
+    const first = rowFor(demo, 'unconfirmed-A', 'https://page.invalid');
     const pending = action(first, 'Check original API');
     await demo.flush();
     await action(first, 'Remove from page');
@@ -268,7 +268,7 @@ if (typeof vm.SourceTextModule !== 'function') {
   test('a fresh page session does not restore earlier in-memory receipts', async () => {
     const first = await createDemo({ predictions: [unconfirmed()] });
     await first.submit('unconfirmed-A');
-    rowFor(first, 'unconfirmed-A', 'this server');
+    rowFor(first, 'unconfirmed-A', 'https://page.invalid');
     const fresh = await createDemo();
     assert.equal(rows(fresh).length, 0);
     assert.equal(fresh.visible('unconfirmed-receipts'), false);

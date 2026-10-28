@@ -1,4 +1,4 @@
-import { normalizeApiBase, validateFeatures, validateModelInfo, validatePrediction, formatProbability, fetchJson } from './api-client.mjs';
+import { normalizeApiBase, validateFeatures, validateModelInfo, validatePrediction, formatProbability, fetchJson, RequestTimeoutError } from './api-client.mjs';
 
 const element = (id) => document.getElementById(id);
 let modelInfo = null;
@@ -17,6 +17,16 @@ const transactionErrorStates = new Set(['PENDING', 'PROCESSING', 'QUEUED', 'COMP
 function recoveryApiKey(base) {
   const pageOrigin = globalThis.location?.origin;
   return base || (typeof pageOrigin === 'string' && /^https?:\/\//.test(pageOrigin) ? pageOrigin : '');
+}
+
+function displayApi(base) {
+  if (base) return base;
+  try {
+    const pageOrigin = globalThis.location?.origin;
+    const parsed = new URL(pageOrigin);
+    if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.origin === pageOrigin) return pageOrigin;
+  } catch { /* A missing or opaque page origin cannot identify an API. */ }
+  return 'this server';
 }
 
 function generateTransactionId() {
@@ -70,6 +80,18 @@ function setMessage(id, message) {
   node.hidden = !message;
 }
 
+function setContextMessage(node, message, context) {
+  const detail = document.createElement('bdi');
+  detail.setAttribute('dir', 'auto');
+  detail.textContent = message;
+  const fixed = document.createElement('bdi');
+  fixed.setAttribute('dir', 'ltr');
+  const fixedText = context.trim();
+  fixed.textContent = fixedText ? `${fixedText} ` : '';
+  node.replaceChildren(fixed, detail);
+  node.hidden = false;
+}
+
 function updateControls() {
   element('connect-button').disabled = busy;
   element('api-base').disabled = busy;
@@ -104,7 +126,7 @@ function rememberRecoveryReceipt(context, outcome) {
   const remove = document.createElement('button');
   const status = document.createElement('p');
   const response = document.createElement('pre');
-  const originalApi = context.apiBase || 'this server';
+  const originalApi = displayApi(context.apiBase);
   description.textContent = `ID: ${context.transactionId}. Original API: ${originalApi}.`;
   reason.textContent = outcome === 'hidden'
     ? 'A valid response was received, but the result was not displayed because the input changed while it was pending.'
@@ -122,13 +144,13 @@ function rememberRecoveryReceipt(context, outcome) {
   response.hidden = true;
   item.append(description, reason, check, remove, status, response);
   const receipt = { ...context, item, check, remove, status, response };
+  const showReceiptMessage = (message) => setContextMessage(status, message, ` Transaction ID: ${context.transactionId}. Original API: ${originalApi}.`);
 
   check.addEventListener('click', async () => {
     if (busy || !recoveryReceipts.includes(receipt)) return;
     busy = true;
     updateControls();
-    status.textContent = `Checking saved status. Original API: ${originalApi}.`;
-    status.hidden = false;
+    showReceiptMessage('Checking saved status.');
     response.textContent = '';
     response.hidden = true;
     try {
@@ -136,17 +158,17 @@ function rememberRecoveryReceipt(context, outcome) {
       if (!recoveryReceipts.includes(receipt)) return;
       validateExplanation(explanation, receipt.transactionId);
       if (explanation.status === 'PENDING') {
-        status.textContent = `The API reports this explanation is pending. Original API: ${originalApi}.`;
+        showReceiptMessage('The API reports this explanation is pending.');
       } else {
         response.textContent = JSON.stringify(explanation, null, 2);
         response.hidden = false;
-        status.textContent = explanation.status === 'FAILED'
-          ? `The API reports explanation processing failed. Original API: ${originalApi}.`
-          : `Saved response received. Original API: ${originalApi}.`;
+        showReceiptMessage(explanation.status === 'FAILED'
+          ? 'The API reports explanation processing failed.'
+          : 'Saved response received.');
       }
     } catch (error) {
       if (!recoveryReceipts.includes(receipt)) return;
-      status.textContent = `${explanationError(error, receipt.transactionId)} Original API: ${originalApi}.`;
+      showReceiptMessage(explanationError(error, receipt.transactionId));
     } finally {
       busy = false;
       updateControls();
@@ -339,18 +361,17 @@ element('transaction').addEventListener('submit', async (event) => {
     const unverified = hasUnverifiedTransactionError(error, submittedContext?.transactionId);
     if (scoringRevision !== submittedRevision) {
       setMessage('input-error', unverified
-        ? 'The API returned an error with a missing or different transaction ID for the previous request. See its original API receipt.'
-        : 'The previous request response was not confirmed after inputs changed. Check its original API receipt.');
+        ? 'The API returned an error with a missing or different transaction ID for the previous request. It may have been processed. See its original API receipt.'
+        : 'The previous request may have been processed, but its response was not confirmed after inputs changed. Check its original API receipt.');
       return;
     }
     const conflict = error.detail === 'Transaction ID already exists; use a new ID'
       ? 'HTTP 409: The API reported a conflict.' : error.message;
-    const message = unverified
-      ? 'The API returned an error with a missing or different transaction ID.'
-      : error.status === 409 && requestContext
-        ? `${conflict} Check the saved explanation before deciding whether to retry. Use a new ID only for a different transaction.`
-        : error.message;
-    setMessage('input-error', message);
+    const isConflict = !unverified && error.status === 409 && Boolean(requestContext);
+    const message = unverified ? 'The API returned an error with a missing or different transaction ID.' : isConflict ? conflict : error.message;
+    const advice = isConflict ? ' Check the saved explanation before deciding whether to retry. Use a new ID only for a different transaction.' : '';
+    const warning = error instanceof RequestTimeoutError ? '' : ' The request may have been processed.';
+    setContextMessage(element('input-error'), message, `${warning}${advice}`);
     setMessage('explanation-message', requestContext
       ? `No valid prediction was received. Check saved status for ${requestContext.transactionId}; this does not confirm that it was saved.`
       : '');
@@ -363,22 +384,24 @@ element('transaction').addEventListener('submit', async (event) => {
 element('explanation-button').addEventListener('click', async () => {
   if (!requestContext || busy) return;
   const lookup = requestContext;
+  const originalApi = displayApi(lookup.apiBase);
+  const showLookupMessage = (message) => setContextMessage(element('explanation-message'), message, ` Transaction ID: ${lookup.transactionId}. Original API: ${originalApi}.`);
   busy = true;
   updateControls();
-  setMessage('explanation-message', 'Checking for a saved explanation…');
+  showLookupMessage('Checking for a saved explanation…');
   element('explanation-response').hidden = true;
   try {
     const explanation = await fetchJson(`${lookup.apiBase}/explain/${encodeURIComponent(lookup.transactionId)}`);
     validateExplanation(explanation, lookup.transactionId);
     if (explanation.status === 'PENDING') {
-      setMessage('explanation-message', 'The API reports this explanation is pending. Check again later.');
+      showLookupMessage('The API reports this explanation is pending. Check again later.');
     } else {
       element('explanation-response').textContent = JSON.stringify(explanation, null, 2);
       element('explanation-response').hidden = false;
-      setMessage('explanation-message', explanation.status === 'FAILED' ? 'The API reports explanation processing failed.' : 'Saved response received from the API. Method and units are included when supplied.');
+      showLookupMessage(explanation.status === 'FAILED' ? 'The API reports explanation processing failed.' : 'Saved response received from the API. Method and units are included when supplied.');
     }
   } catch (error) {
-    setMessage('explanation-message', explanationError(error, lookup.transactionId));
+    showLookupMessage(explanationError(error, lookup.transactionId));
   } finally {
     busy = false;
     updateControls();
@@ -389,23 +412,23 @@ element('manual-explanation-button').addEventListener('click', async () => {
   const id = element('manual-transaction-id').value.trim();
   if (busy || !apiBaseValid || !validTransactionId(id)) return;
   const lookupBase = apiBase;
-  const selectedApi = lookupBase || 'this server';
-  const showMessage = (message) => setMessage('manual-explanation-message', `${message} Selected API: ${selectedApi}.`);
+  const selectedApi = displayApi(lookupBase);
+  const showMessage = (message) => setContextMessage(element('manual-explanation-message'), message, ` Transaction ID: ${id}. Selected API: ${selectedApi}.`);
   clearManualResult();
   const revision = manualRevision;
   busy = true;
   updateControls();
-  showMessage(`Checking for a saved explanation for ${id}…`);
+  showMessage('Checking for a saved explanation…');
   try {
     const explanation = await fetchJson(`${lookupBase}/explain/${encodeURIComponent(id)}`);
     if (revision !== manualRevision) return;
     validateExplanation(explanation, id);
     if (explanation.status === 'PENDING') {
-      showMessage(`The API reports the explanation for ${id} is pending. Check again later.`);
+      showMessage('The API reports this explanation is pending. Check again later.');
     } else {
       element('manual-explanation-response').textContent = JSON.stringify(explanation, null, 2);
       element('manual-explanation-response').hidden = false;
-      showMessage(explanation.status === 'FAILED' ? `The API reports explanation processing failed for ${id}.` : `Saved response received for ${id}. Method and units are included when supplied.`);
+      showMessage(explanation.status === 'FAILED' ? 'The API reports explanation processing failed.' : 'Saved response received. Method and units are included when supplied.');
     }
   } catch (error) {
     if (revision !== manualRevision) return;

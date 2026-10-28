@@ -4,16 +4,18 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 class Element {
-  constructor(id, hidden = false) {
-    Object.assign(this, { id, hidden, disabled: false, value: '', textContent: '', dataset: {}, children: [] });
+  constructor(id, hidden = false, tagName = '') {
+    Object.assign(this, { id, hidden, disabled: false, value: '', _textContent: '', dataset: {}, children: [], tagName: tagName.toUpperCase() });
     this.listeners = new Map();
     this.attributes = new Map();
     this.parents = [];
   }
+  get textContent() { return this._textContent + this.children.map((child) => child.textContent).join(''); }
+  set textContent(value) { this._textContent = String(value ?? ''); this.children = []; }
   addEventListener(type, callback) { this.listeners.set(type, callback); }
   setAttribute(name, value) { this.attributes.set(name, value); }
   removeAttribute(name) { this.attributes.delete(name); }
-  replaceChildren(...children) { this.children = children; }
+  replaceChildren(...children) { this._textContent = ''; this.children = children; }
   append(...children) { this.children.push(...children); }
   focus() { this.focused = true; }
 }
@@ -41,7 +43,7 @@ export async function createDemo({ apiBase = '', pageOrigin = 'https://page.inva
   const node = (id) => { assert.ok(nodes.has(id), `Missing actual DOM ID: ${id}`); return nodes.get(id); };
   const requests = [], timers = new Map();
   const context = vm.createContext({ AbortController, URL, location: { origin: pageOrigin },
-    document: { getElementById: node, createElement: () => new Element() },
+    document: { getElementById: node, createElement: (name) => new Element(undefined, false, name) },
     crypto: cryptoSource === undefined ? (uuid ? { randomUUID: () => 'generated-fixture-id' } : undefined) : cryptoSource,
     setTimeout(callback) { const handle = {}; timers.set(handle, callback); return handle; },
     clearTimeout(handle) { timers.delete(handle); } });
@@ -59,6 +61,7 @@ export async function createDemo({ apiBase = '', pageOrigin = 'https://page.inva
       if (fixture.timeout) {
         return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('Fixed aborted transport')), { once: true }));
       }
+      if (fixture.networkFailure) throw vm.runInContext('new TypeError("Synthetic transport failure")', context);
       if (fixture.deferred) fixture = await fixture.deferred;
       const id = request.payload.transaction_id || 'server-generated-fixture-id';
       const result = response(fixture.status || 200, fixture.data || { transaction_id: id, prediction: 0, score: 0.25,

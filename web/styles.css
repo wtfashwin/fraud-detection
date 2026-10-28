@@ -63,7 +63,7 @@ summary { cursor: pointer; font-weight: 600; font-size: .875rem; }
 dt { color: #55697b; font-size: .8rem; margin-top: .8rem; }
 dd { margin: .2rem 0 0; overflow-wrap: anywhere; font-size: .875rem; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f1f5f9; border-radius: 4px; padding: 1rem; font-size: .8rem; max-height: 420px; overflow: auto; }
-.explanation { border-top: 1px solid #d1dce5; margin-top: 1.4rem; padding-top: .3rem; }
+.explanation { border-top: 1px solid #d1dce5; margin-top: 1.4rem; padding-top: .3rem; overflow-wrap: anywhere; }
 #explanation-message { font-size: .875rem; overflow-wrap: anywhere; }
 footer { color: #55697b; font-size: .8rem; margin-top: 1.5rem; }
 @media (max-width: 760px) { .workbench { grid-template-columns: 1fr; } .intro { display: block; } .demo-label { display: inline-block; margin-top: 1rem; } main { padding-top: 1.8rem; } }
