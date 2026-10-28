@@ -185,6 +185,8 @@ DATA_CSV=data/creditcard.csv MODEL_OUTPUT_DIR=models/trained python -m training.
 
 Training splits raw data before fitting transforms. Five stratified training folds use SMOTE up to a minority/majority ratio of 0.5; it is skipped when that ratio is already reached. Validation and holdout rows are not resampled. `DECISION_THRESHOLD` changes evaluation metrics; API classification uses the saved estimator's `predict` method.
 
+Training and tuning report `holdout_feature_overlap_rows`, the number of outer holdout rows whose raw feature vectors match a fitted training row. The check uses the same fingerprints as the external evaluation guard and excludes labels. A match can represent distinct transactions and does not establish leakage; no match does not prove independence. It does not inspect overlap inside cross-validation folds or change training, existing scores, thresholds, or registration decisions.
+
 New bundles go to `models/trained/`. Evaluate on independently held-out data:
 
 ```sh
