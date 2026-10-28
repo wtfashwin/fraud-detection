@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware import Middleware
 from pydantic import BaseModel, Field, StrictFloat, StrictInt, field_validator
 from prometheus_fastapi_instrumentator import Instrumentator
 from prometheus_client import Counter, Histogram, REGISTRY
@@ -19,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from api.inference import load_bundle, InvalidFeatures
 from api.drift import DriftMonitor, DriftCollector
 from api.queue import celery_app, check_broker
+from api.request_body import PredictionBodyLimit
 from db.db import engine
 from db.models import Explanation
 
@@ -41,7 +43,8 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="Fraud Detection API", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="Fraud Detection API", version="1.1.0", lifespan=lifespan,
+              middleware=[Middleware(PredictionBodyLimit)])
 
 
 class TransactionIn(BaseModel):

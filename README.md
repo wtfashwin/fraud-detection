@@ -80,7 +80,7 @@ Features must be finite numbers in this order: `Time`, `V1` through `V28`, `Amou
 | `GET /health` | Process liveness and input-drift status. |
 | `GET /ready` | `200` when the model, migrated explanation table, and broker are usable; otherwise `503`. |
 | `GET /model-info` | Feature names, order, and model source. |
-| `POST /predict` | Prediction, probability, transaction ID, and queued explanation status. |
+| `POST /predict` | Prediction, probability, transaction ID, and queued explanation status. Request bodies above 64 KiB return `413`. |
 | `GET /explain/{transaction_id}` | `202` pending, `200` completed, `503` failed, or `404` unknown. |
 | `GET /metrics` | Prometheus metrics. |
 
