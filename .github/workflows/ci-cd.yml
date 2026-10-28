@@ -116,6 +116,49 @@ jobs:
           name: http-smoke-${{ matrix.runner }}
           path: reports/runtime/http-smoke.json
           if-no-files-found: error
+      # Auth integration has a different project, network, volumes and port.
+      - name: Authenticated demo and queued explanation
+        env:
+          AUTH_COMPOSE_PROJECT: fraud-auth-${{ github.run_id }}-${{ github.run_attempt }}
+          API_PORT: '18001'
+          DEMO_AUTH_MODE: basic
+          COMPOSE_PROFILES: ''
+          FRAUD_IMAGE: fraud-api:local
+        run: |
+          set +x
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          if [[ ! "$AUTH_COMPOSE_PROJECT" =~ ^fraud-auth-[0-9]+-[0-9]+$ ]]; then
+            echo 'Refusing an unsafe authenticated test project name'
+            exit 1
+          fi
+          auth_compose=(docker compose --env-file .env.example --file docker-compose.yml --project-name "$AUTH_COMPOSE_PROJECT")
+          existing="$("${auth_compose[@]}" ps --all --quiet 2>/dev/null)"
+          if [ -n "$existing" ]; then
+            echo 'Refusing an occupied authenticated test project'
+            exit 1
+          fi
+          DEMO_AUTH_USERNAME="$(python3 -c 'import secrets; print("ci" + secrets.token_hex(8))')"
+          DEMO_AUTH_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+          export DEMO_AUTH_USERNAME DEMO_AUTH_PASSWORD
+          cleanup_auth_stack() {
+            "${auth_compose[@]}" down --volumes --timeout 30 >/dev/null 2>&1
+          }
+          trap cleanup_auth_stack EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          if ! "${auth_compose[@]}" up --no-build -d --wait --wait-timeout 120 api xai-worker >/dev/null 2>&1; then
+            echo 'Authenticated test stack did not become healthy'
+            exit 1
+          fi
+          python3 scripts/smoke_demo_auth.py --url http://127.0.0.1:18001 \
+            --features-csv tests/fixtures/synthetic_transaction.csv \
+            --output reports/runtime/auth-http-smoke.json
+      - name: Save authenticated synthetic HTTP responses
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: authenticated-http-smoke-${{ matrix.runner }}
+          path: reports/runtime/auth-http-smoke.json
+          if-no-files-found: error
       - name: Build optional CPU training image
         run: docker build --target training -t fraud-training:ci .
       - name: Check optional training image dependencies

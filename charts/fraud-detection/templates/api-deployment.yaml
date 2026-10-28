@@ -1,3 +1,14 @@
+{{- if not (has .Values.demoAuth.mode (list "off" "basic")) -}}
+{{- fail "demoAuth.mode must be off or basic" -}}
+{{- end -}}
+{{- if eq .Values.demoAuth.mode "basic" -}}
+{{- $_ := required "demoAuth.existingSecret is required in basic mode" .Values.demoAuth.existingSecret -}}
+{{- if .Values.monitoring.enabled -}}
+{{- fail "demoAuth basic mode requires monitoring.enabled=false; configure authenticated scraping separately" -}}
+{{- end -}}
+{{- else if .Values.demoAuth.existingSecret -}}
+{{- fail "demoAuth.existingSecret requires basic mode" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -62,6 +73,20 @@ spec:
           containerPort: 8000
         env:
           {{- include "fraud-detection.environment" . | nindent 10 }}
+          - name: DEMO_AUTH_MODE
+            value: {{ .Values.demoAuth.mode | quote }}
+          {{- if eq .Values.demoAuth.mode "basic" }}
+          - name: DEMO_AUTH_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.demoAuth.existingSecret | quote }}
+                key: username
+          - name: DEMO_AUTH_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.demoAuth.existingSecret | quote }}
+                key: password
+          {{- end }}
           - name: RUN_MIGRATIONS
             value: "1"
           - name: OTEL_SERVICE_NAME
@@ -77,20 +102,25 @@ spec:
             drop: [ALL]
         startupProbe:
           httpGet:
-            path: /health
+            path: {{ if eq .Values.demoAuth.mode "basic" }}/status{{ else }}/health{{ end }}
             port: http
           periodSeconds: 5
           failureThreshold: 60
         readinessProbe:
+          {{- if eq .Values.demoAuth.mode "basic" }}
+          exec:
+            command: [python, -m, api.probe]
+          {{- else }}
           httpGet:
             path: /ready
             port: http
+          {{- end }}
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
         livenessProbe:
           httpGet:
-            path: /health
+            path: {{ if eq .Values.demoAuth.mode "basic" }}/status{{ else }}/health{{ end }}
             port: http
           periodSeconds: 20
           timeoutSeconds: 5

@@ -75,6 +75,30 @@ def check(helm):
             args.extend(["--set", setting])
         rejected = subprocess.run(args, text=True, capture_output=True)
         assert rejected.returncode != 0 and expected in rejected.stderr
+    secured = render(helm, settings=["demoAuth.mode=basic", "demoAuth.existingSecret=synthetic-demo-auth", "monitoring.enabled=false"])
+    secured_api, secured_worker = (workload(secured, component)["spec"]["template"]["spec"] for component in ["api", "worker"])
+    secured_container = secured_api["containers"][0]
+    secured_env = env(secured_container)
+    assert secured_env.get("DEMO_AUTH_MODE") == "basic"
+    for name, key in [("DEMO_AUTH_USERNAME", "username"), ("DEMO_AUTH_PASSWORD", "password")]:
+        assert secured_env[name] == {"secretKeyRef": {"name": "synthetic-demo-auth", "key": key}}
+    assert secured_container["readinessProbe"]["exec"]["command"] == ["python", "-m", "api.probe"]
+    assert secured_container["startupProbe"]["httpGet"]["path"] == "/status"
+    assert secured_container["livenessProbe"]["httpGet"]["path"] == "/status"
+    assert "prometheus.io/scrape" not in workload(secured, "api")["spec"]["template"]["metadata"]["annotations"]
+    for container in secured_api["initContainers"] + secured_worker["containers"] + secured_worker["initContainers"]:
+        assert not any(name.startswith("DEMO_AUTH_") for name in env(container))
+    for settings in [
+        ["demoAuth.mode=basic", "monitoring.enabled=false"],
+        ["demoAuth.mode=basic", "demoAuth.existingSecret=synthetic-demo-auth"],
+        ["demoAuth.mode=typo"],
+        ["demoAuth.mode=off", "demoAuth.existingSecret=synthetic-demo-auth"],
+    ]:
+        args = [helm, "template", "fraud", str(CHART), "--set", "image.tag=render-test", "--set", "postgresql.auth.password=render-test-only"]
+        for setting in settings:
+            args.extend(["--set", setting])
+        rejected = subprocess.run(args, text=True, capture_output=True)
+        assert rejected.returncode != 0 and "demoAuth" in rejected.stderr
     print("Helm manifest checks passed: baseline, optional components, shared artifact, probes, schema gate, selectors, dependency host overrides.")
 
 

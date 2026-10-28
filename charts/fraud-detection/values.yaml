@@ -73,3 +73,8 @@ otel:
   # An externally supplied collector is required when enabled.
   enabled: false
   endpoint: ""
+
+# Optional shared-secret demo gate. The Secret is created outside this chart.
+demoAuth:
+  mode: "off"
+  existingSecret: ""

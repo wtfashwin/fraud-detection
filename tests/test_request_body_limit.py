@@ -5,6 +5,7 @@ The fixed scoring double avoids model fitting; no broker or remote service is us
 import asyncio
 import importlib
 import json
+import uuid
 from types import SimpleNamespace
 
 import httpx
@@ -80,6 +81,20 @@ def test_oversized_malformed_json_rejected_before_json_validation(prediction_app
     assert response.status_code == 413
     assert response.headers["X-Correlation-ID"]
     assert prediction_app.statements == []
+
+
+def test_auth_off_oversized_body_retains_correlation_without_no_store(prediction_app, monkeypatch):
+    monkeypatch.setenv("DEMO_AUTH_MODE", "off")
+    monkeypatch.delenv("DEMO_AUTH_USERNAME", raising=False)
+    monkeypatch.delenv("DEMO_AUTH_PASSWORD", raising=False)
+    monkeypatch.setattr(prediction_app.app, "middleware_stack", None)
+    response = post_chunks(prediction_app.app, [prediction_body(65537)])
+    assert response.status_code == 413
+    uuid.UUID(response.headers["x-correlation-id"])
+    assert "cache-control" not in response.headers
+    assert prediction_app.scored == []
+    assert prediction_app.statements == []
+    assert prediction_app.dispatched == []
 
 
 def test_prediction_limit_counts_utf8_bytes(prediction_app):

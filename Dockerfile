@@ -23,7 +23,7 @@ LABEL org.opencontainers.image.title="Fraud Detection API" \
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=3)"
+    CMD ["python", "-m", "api.probe"]
 ENTRYPOINT ["/app/scripts/run_migrations.sh"]
 CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "api.app:app", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "60"]
 
