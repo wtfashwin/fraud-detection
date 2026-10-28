@@ -96,6 +96,10 @@ async def unexpected_error(request: Request, exc: Exception):
         headers["Cache-Control"] = "no-store"
         headers["X-Correlation-ID"] = getattr(request.state, "correlation_id", None) or str(uuid.uuid4())
     return PlainTextResponse("Internal Server Error", status_code=500, headers=headers)
+    # Starlette's outer server-error response bypasses the middleware return path.
+    correlation = getattr(request.state, "correlation_id", None) or str(uuid.uuid4())
+    return PlainTextResponse("Internal Server Error", status_code=500,
+                             headers={"X-Correlation-ID": correlation})
 
 
 def get_drift_monitor():
@@ -225,6 +229,10 @@ def get_explanation(transaction_id: str):
     if row["status"] == "FAILED":
         raise HTTPException(status_code=503, detail={"transaction_id": transaction_id, "status": "FAILED",
                                                   "message": "Explanation calculation failed"})
+    if row["status"] != "COMPLETED":
+        logger.error("Saved explanation has an unrecognized status")
+        raise HTTPException(status_code=503, detail={"transaction_id": transaction_id, "status": "UNAVAILABLE",
+                                                  "message": "Saved explanation status is unavailable"})
     return {key: row[key] for key in ("transaction_id", "status", "created_at", "shap_values", "feature_names",
                                       "base_value", "explanation_method")}
 

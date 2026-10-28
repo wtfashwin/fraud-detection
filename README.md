@@ -100,7 +100,9 @@ Features must be finite numbers in this order: `Time`, `V1` through `V28`, `Amou
 | `GET /explain/{transaction_id}` | `202` pending, `200` completed, `503` failed, or `404` unknown. |
 | `GET /metrics` | Prometheus metrics. |
 
-Transaction IDs are optional; the server generates a UUID by default. Reusing one returns `409` without replacing the previous record. Storage or dispatch failure returns `503`. After a timeout, check the saved status before submitting the transaction again.
+Transaction IDs are optional; the server generates a UUID by default. Reusing one returns `409` without replacing the previous record. Storage, dispatch, or an unrecognized saved explanation state returns `503`; an unrecognized state is reported as `UNAVAILABLE` without returning explanation values. After a timeout, check the saved status before submitting the transaction again.
+
+`POST /predict` accepts at most 65,536 bytes (64 KiB) of request body, including JSON whitespace and ignored fields. The API checks declared and streamed sizes before parsing JSON; a larger body returns `413` with `X-Correlation-ID` before scoring, database writes, or task dispatch. The limit counts bytes, including all bytes of UTF-8 characters. Bodies within the ceiling still undergo normal feature validation, which can return `422`.
 
 To save responses from a complete request/worker check:
 

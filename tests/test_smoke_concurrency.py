@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +13,8 @@ from scripts.smoke_test import smoke
 
 
 @contextmanager
-def concurrent_api(*, statuses=(200, 409), completes=True, wrong_id=None, slow_body=False):
+def concurrent_api(*, statuses=(200, 409), completes=True, wrong_id=None, slow_body=False,
+                   on_explanation=None):
     """Require both HTTP submissions before returning either prediction."""
     barrier = threading.Barrier(2, timeout=3)
     lock = threading.Lock()
@@ -50,6 +52,8 @@ def concurrent_api(*, statuses=(200, 409), completes=True, wrong_id=None, slow_b
                 self.reply(200, {"feature_count": 3, "feature_names": ["Time", "V1", "Amount"]})
             elif self.path.startswith("/explain/"):
                 transaction_id = self.path.rsplit("/", 1)[1]
+                if on_explanation is not None:
+                    on_explanation()
                 if not completes:
                     self.reply(202, {"transaction_id": transaction_id, "status": "PENDING"})
                 else:
@@ -118,6 +122,43 @@ def test_smoke_requires_worker_completion_after_concurrent_acceptance():
     with concurrent_api(completes=False) as (base, _):
         with pytest.raises(TimeoutError, match="did not complete"):
             smoke(base, timeout=0)
+
+
+@pytest.mark.parametrize("observed_at", [1.0, 2.0])
+def test_smoke_rejects_completion_observed_at_or_after_deadline(monkeypatch, observed_at):
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr(smoke_test, "time", SimpleNamespace(monotonic=lambda: clock.now))
+
+    def completed_response():
+        clock.now = observed_at
+
+    with concurrent_api(on_explanation=completed_response) as (base, _):
+        with pytest.raises(TimeoutError, match="did not complete"):
+            smoke(base, timeout=1)
+
+
+def test_smoke_accepts_completion_observed_before_deadline(monkeypatch):
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr(smoke_test, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    with concurrent_api(on_explanation=lambda: setattr(clock, "now", 0.5)) as (base, _):
+        assert smoke(base, timeout=1)["status"] == "PASS"
+
+
+def test_smoke_stops_polling_at_deadline_without_oversleep(monkeypatch):
+    clock = SimpleNamespace(now=0.0, polls=0)
+
+    def sleep(seconds):
+        clock.now += seconds
+
+    def pending_response():
+        clock.polls += 1
+
+    monkeypatch.setattr(smoke_test, "time", SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    with concurrent_api(completes=False, on_explanation=pending_response) as (base, _):
+        with pytest.raises(TimeoutError, match="did not complete"):
+            smoke(base, timeout=0.25)
+    assert clock.now == 0.25
+    assert clock.polls == 1
 
 
 @pytest.mark.parametrize("wrong_id", ["prediction", "explanation"])

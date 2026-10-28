@@ -84,6 +84,28 @@ def test_nonfinite_input_rejected(api_client):
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize("saved_status", ["RUNNING", "", "completed"])
+def test_unknown_saved_status_does_not_return_an_explanation(api_client, saved_status):
+    from db.models import Explanation
+    from sqlalchemy import insert, select
+    client, _, engine = api_client
+    with engine.begin() as connection:
+        connection.execute(insert(Explanation).values(
+            transaction_id="synthetic-unknown-status", correlation_id="synthetic-correlation",
+            status=saved_status, shap_values=[9.], feature_names=["stale-result"],
+            base_value=3., explanation_method="synthetic-stale"))
+
+    response = client.get("/explain/synthetic-unknown-status")
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["transaction_id"] == "synthetic-unknown-status"
+    assert detail["status"] == "UNAVAILABLE"
+    assert "shap_values" not in response.json()
+    with engine.connect() as connection:
+        assert connection.execute(select(Explanation.status).where(
+            Explanation.transaction_id == "synthetic-unknown-status")).scalar_one() == saved_status
+
+
 def test_queue_failure_is_503_and_persisted_failed(api_client, monkeypatch):
     client, module, _ = api_client
     def unavailable(*args, **kwargs):
