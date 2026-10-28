@@ -99,6 +99,14 @@ if (typeof vm.SourceTextModule !== 'function') {
     const demo = await createDemo({ predictions: [failedConfirmation, duplicate] });
     await demo.submit('uncertain-id');
     await demo.submit('uncertain-id');
+    assert.equal(demo.posts().length, 1);
+    assert.match(demo.node('input-error').textContent, /recovery receipt/i);
+    const receipt = demo.node('unconfirmed-receipt-list').children[0];
+    const remove = receipt.children.find((child) => child.textContent === 'Remove from page');
+    assert.ok(remove, 'An explicit page-only removal is required before reusing the ID.');
+    remove.listeners.get('click')();
+    await demo.submit('uncertain-id');
+    assert.equal(demo.posts().length, 2);
     const message = demo.node('input-error').textContent;
     assert.match(message, /409/);
     assert.match(message, /check.*saved/i);

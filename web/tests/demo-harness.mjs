@@ -18,7 +18,7 @@ class Element {
   focus() { this.focused = true; }
 }
 
-export async function createDemo({ apiBase = '', uuid = true, cryptoSource, predictions = [], explanations = [], modelInfoStatus = 200 } = {}) {
+export async function createDemo({ apiBase = '', pageOrigin = 'https://page.invalid', uuid = true, cryptoSource, predictions = [], explanations = [], modelInfoStatus = 200 } = {}) {
   const markup = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const nodes = new Map(), stack = [];
   const voidTags = new Set(['meta', 'link', 'input', 'br', 'img', 'source', 'track', 'wbr', 'hr', 'area', 'base', 'embed', 'param', 'col']);
@@ -40,7 +40,7 @@ export async function createDemo({ apiBase = '', uuid = true, cryptoSource, pred
   }
   const node = (id) => { assert.ok(nodes.has(id), `Missing actual DOM ID: ${id}`); return nodes.get(id); };
   const requests = [], timers = new Map();
-  const context = vm.createContext({ AbortController, URL,
+  const context = vm.createContext({ AbortController, URL, location: { origin: pageOrigin },
     document: { getElementById: node, createElement: () => new Element() },
     crypto: cryptoSource === undefined ? (uuid ? { randomUUID: () => 'generated-fixture-id' } : undefined) : cryptoSource,
     setTimeout(callback) { const handle = {}; timers.set(handle, callback); return handle; },
@@ -61,8 +61,10 @@ export async function createDemo({ apiBase = '', uuid = true, cryptoSource, pred
       }
       if (fixture.deferred) fixture = await fixture.deferred;
       const id = request.payload.transaction_id || 'server-generated-fixture-id';
-      return response(fixture.status || 200, fixture.data || { transaction_id: id, prediction: 0, score: 0.25,
+      const result = response(fixture.status || 200, fixture.data || { transaction_id: id, prediction: 0, score: 0.25,
         correlation_id: '00000000-0000-4000-8000-000000000001', explanation_status: 'Calculation queued' }, fixture.nonJson);
+      if (fixture.redirectedTo) Object.assign(result, { redirected: true, url: fixture.redirectedTo });
+      return result;
     }
     if (request.method === 'GET' && url.includes('/explain/')) {
       let fixture = explanations.shift() || {};

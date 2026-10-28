@@ -8,8 +8,16 @@ let prediction = null;
 let requestContext = null;
 let busy = false;
 let manualRevision = 0;
+let scoringRevision = 0;
+const recoveryReceipts = [];
+const maxRecoveryReceipts = 10;
 const validTransactionId = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
 const transactionErrorStates = new Set(['PENDING', 'PROCESSING', 'QUEUED', 'COMPLETED', 'FAILED', 'DISPATCH_UNCONFIRMED']);
+
+function recoveryApiKey(base) {
+  const pageOrigin = globalThis.location?.origin;
+  return base || (typeof pageOrigin === 'string' && /^https?:\/\//.test(pageOrigin) ? pageOrigin : '');
+}
 
 function generateTransactionId() {
   const source = globalThis.crypto;
@@ -75,9 +83,88 @@ function updateControls() {
   element('explanation-panel').hidden = !requestContext;
   element('result-panel').setAttribute('aria-busy', String(busy));
   element('score-button').textContent = busy ? 'Please wait…' : 'Score transaction';
+  for (const receipt of recoveryReceipts) {
+    receipt.check.disabled = busy;
+    receipt.remove.disabled = busy;
+  }
+}
+
+function renderRecoveryReceipts() {
+  element('unconfirmed-receipt-list').replaceChildren(...recoveryReceipts.map((receipt) => receipt.item));
+  element('unconfirmed-receipts').hidden = recoveryReceipts.length === 0;
+  updateControls();
+}
+
+function rememberRecoveryReceipt(context, outcome) {
+  if (!context || recoveryReceipts.some((receipt) => receipt.transactionId === context.transactionId && recoveryApiKey(receipt.apiBase) === recoveryApiKey(context.apiBase))) return;
+  const item = document.createElement('li');
+  const description = document.createElement('p');
+  const reason = document.createElement('p');
+  const check = document.createElement('button');
+  const remove = document.createElement('button');
+  const status = document.createElement('p');
+  const response = document.createElement('pre');
+  const originalApi = context.apiBase || 'this server';
+  description.textContent = `ID: ${context.transactionId}. Original API: ${originalApi}.`;
+  reason.textContent = outcome === 'hidden'
+    ? 'A valid response was received, but the result was not displayed because the input changed while it was pending.'
+    : 'The prediction response was not confirmed. This does not establish whether the request was saved.';
+  check.type = 'button';
+  check.setAttribute('class', 'secondary');
+  check.textContent = 'Check original API';
+  check.setAttribute('aria-label', `Check original API for ID ${context.transactionId}. Original API: ${originalApi}.`);
+  remove.type = 'button';
+  remove.setAttribute('class', 'secondary');
+  remove.textContent = 'Remove from page';
+  remove.setAttribute('aria-label', `Remove from page for ID ${context.transactionId}. Original API: ${originalApi}.`);
+  status.setAttribute('role', 'status');
+  status.hidden = true;
+  response.hidden = true;
+  item.append(description, reason, check, remove, status, response);
+  const receipt = { ...context, item, check, remove, status, response };
+
+  check.addEventListener('click', async () => {
+    if (busy || !recoveryReceipts.includes(receipt)) return;
+    busy = true;
+    updateControls();
+    status.textContent = `Checking saved status. Original API: ${originalApi}.`;
+    status.hidden = false;
+    response.textContent = '';
+    response.hidden = true;
+    try {
+      const explanation = await fetchJson(`${receipt.apiBase}/explain/${encodeURIComponent(receipt.transactionId)}`);
+      if (!recoveryReceipts.includes(receipt)) return;
+      validateExplanation(explanation, receipt.transactionId);
+      if (explanation.status === 'PENDING') {
+        status.textContent = `The API reports this explanation is pending. Original API: ${originalApi}.`;
+      } else {
+        response.textContent = JSON.stringify(explanation, null, 2);
+        response.hidden = false;
+        status.textContent = explanation.status === 'FAILED'
+          ? `The API reports explanation processing failed. Original API: ${originalApi}.`
+          : `Saved response received. Original API: ${originalApi}.`;
+      }
+    } catch (error) {
+      if (!recoveryReceipts.includes(receipt)) return;
+      status.textContent = `${explanationError(error, receipt.transactionId)} Original API: ${originalApi}.`;
+    } finally {
+      busy = false;
+      updateControls();
+    }
+  });
+
+  remove.addEventListener('click', () => {
+    const index = recoveryReceipts.indexOf(receipt);
+    if (index < 0) return;
+    recoveryReceipts.splice(index, 1);
+    renderRecoveryReceipts();
+  });
+  recoveryReceipts.push(receipt);
+  renderRecoveryReceipts();
 }
 
 function clearResult() {
+  scoringRevision += 1;
   prediction = null;
   requestContext = null;
   element('result').hidden = true;
@@ -201,6 +288,12 @@ element('transaction').addEventListener('submit', async (event) => {
     if (transactionId && !validTransactionId(transactionId)) {
       throw new Error('Use 1–128 letters, numbers, dots, underscores, colons, or hyphens for the ID. Start with a letter or number.');
     }
+    if (recoveryReceipts.some((receipt) => receipt.transactionId === transactionId && recoveryApiKey(receipt.apiBase) === recoveryApiKey(submittedBase))) {
+      throw new Error('A recovery receipt exists for this ID and API. Check its original API, then save details and remove the receipt before reusing this ID. This request was not sent.');
+    }
+    if (recoveryReceipts.length >= maxRecoveryReceipts) {
+      throw new Error('Session receipt limit reached. Save details and remove a receipt before scoring a different transaction. This request was not sent.');
+    }
     payload = { features, ...(transactionId ? { transaction_id: transactionId } : {}) };
     requestContext = transactionId ? { transactionId, apiBase: submittedBase } : null;
   } catch (error) {
@@ -209,6 +302,8 @@ element('transaction').addEventListener('submit', async (event) => {
     element(invalidField).focus();
     return;
   }
+  const submittedContext = requestContext;
+  const submittedRevision = scoringRevision;
   busy = true;
   updateControls();
   setMessage('request-status', 'Scoring with the connected API…');
@@ -216,6 +311,10 @@ element('transaction').addEventListener('submit', async (event) => {
     const response = validatePrediction(await fetchJson(`${submittedBase}/predict`, { method: 'POST', body: JSON.stringify(payload) }));
     if (payload.transaction_id && response.transaction_id !== payload.transaction_id) {
       throw new Error('The API returned a different transaction ID.');
+    }
+    if (scoringRevision !== submittedRevision) {
+      rememberRecoveryReceipt(submittedContext, 'hidden');
+      return;
     }
     prediction = response;
     requestContext = validTransactionId(prediction.transaction_id)
@@ -234,9 +333,16 @@ element('transaction').addEventListener('submit', async (event) => {
     setMessage('request-status', 'Prediction received. The result below is the API response.');
     element('result-title').focus();
   } catch (error) {
+    rememberRecoveryReceipt(submittedContext, 'unconfirmed');
     prediction = null;
     setMessage('request-status', '');
-    const unverified = hasUnverifiedTransactionError(error, requestContext?.transactionId);
+    const unverified = hasUnverifiedTransactionError(error, submittedContext?.transactionId);
+    if (scoringRevision !== submittedRevision) {
+      setMessage('input-error', unverified
+        ? 'The API returned an error with a missing or different transaction ID for the previous request. See its original API receipt.'
+        : 'The previous request response was not confirmed after inputs changed. Check its original API receipt.');
+      return;
+    }
     const conflict = error.detail === 'Transaction ID already exists; use a new ID'
       ? 'HTTP 409: The API reported a conflict.' : error.message;
     const message = unverified
