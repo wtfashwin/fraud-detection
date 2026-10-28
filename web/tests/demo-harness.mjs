@@ -18,7 +18,7 @@ class Element {
   focus() { this.focused = true; }
 }
 
-export async function createDemo({ apiBase = '', uuid = true, predictions = [], explanations = [] } = {}) {
+export async function createDemo({ apiBase = '', uuid = true, cryptoSource, predictions = [], explanations = [] } = {}) {
   const markup = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const nodes = new Map(), stack = [];
   const voidTags = new Set(['meta', 'link', 'input', 'br', 'img', 'source', 'track', 'wbr', 'hr', 'area', 'base', 'embed', 'param', 'col']);
@@ -41,7 +41,7 @@ export async function createDemo({ apiBase = '', uuid = true, predictions = [], 
   const requests = [], timers = new Map();
   const context = vm.createContext({ AbortController, URL,
     document: { getElementById: node, createElement: () => new Element() },
-    crypto: uuid ? { randomUUID: () => 'generated-fixture-id' } : undefined,
+    crypto: cryptoSource === undefined ? (uuid ? { randomUUID: () => 'generated-fixture-id' } : undefined) : cryptoSource,
     setTimeout(callback) { const handle = {}; timers.set(handle, callback); return handle; },
     clearTimeout(handle) { timers.delete(handle); } });
   const response = (status, data, nonJson = false) => ({ status, ok: status >= 200 && status < 300,

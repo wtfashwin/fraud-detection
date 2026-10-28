@@ -9,6 +9,24 @@ let busy = false;
 const validTransactionId = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
 const transactionErrorStates = new Set(['PENDING', 'PROCESSING', 'QUEUED', 'COMPLETED', 'FAILED', 'DISPATCH_UNCONFIRMED']);
 
+function generateTransactionId() {
+  const source = globalThis.crypto;
+  try {
+    if (typeof source?.randomUUID === 'function') {
+      const id = source.randomUUID();
+      if (validTransactionId(id)) return id;
+    }
+  } catch { /* Try the other secure browser generator. */ }
+  try {
+    if (typeof source?.getRandomValues === 'function') {
+      const bytes = new Uint8Array(16);
+      source.getRandomValues(bytes);
+      return `tx-${Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')}`;
+    }
+  } catch { /* Require an entered ID if neither method works. */ }
+  return null;
+}
+
 function hasUnverifiedTransactionError(error, expectedId) {
   const detail = error?.detail;
   if (!expectedId || !detail || typeof detail !== 'object' || Array.isArray(detail)) return false;
@@ -135,8 +153,9 @@ element('transaction').addEventListener('submit', async (event) => {
     const features = validateFeatures(element('features').value, modelInfo.feature_count);
     invalidField = 'transaction-id';
     let transactionId = element('transaction-id').value.trim();
-    if (!transactionId && globalThis.crypto?.randomUUID) {
-      transactionId = crypto.randomUUID();
+    if (!transactionId) {
+      transactionId = generateTransactionId();
+      if (!transactionId) throw new Error('Enter a transaction ID. Your browser cannot generate one automatically.');
       element('transaction-id').value = transactionId;
     }
     if (transactionId && !validTransactionId(transactionId)) {
@@ -178,9 +197,14 @@ element('transaction').addEventListener('submit', async (event) => {
     prediction = null;
     setMessage('request-status', '');
     const unverified = hasUnverifiedTransactionError(error, requestContext?.transactionId);
+    const conflict = error.detail === 'Transaction ID already exists; use a new ID'
+      ? 'HTTP 409: The API reported a conflict.' : error.message;
     const message = unverified
-      ? 'The API returned an error with a missing or different transaction ID.' : error.message;
-    setMessage('input-error', `${message}${!unverified && error.status === 409 ? ' Enter a new transaction ID before scoring again.' : ''}`);
+      ? 'The API returned an error with a missing or different transaction ID.'
+      : error.status === 409 && requestContext
+        ? `${conflict} Check the saved explanation before deciding whether to retry. Use a new ID only for a different transaction.`
+        : error.message;
+    setMessage('input-error', message);
     setMessage('explanation-message', requestContext
       ? `No valid prediction was received. Check saved status for ${requestContext.transactionId}; this does not confirm that it was saved.`
       : '');

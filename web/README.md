@@ -8,11 +8,11 @@ The demo loads the required feature names and order from `GET /model-info`. Ente
 
 The model probability is not proof of fraud or a measured accuracy figure. Explanation status is shown separately. **Check explanation** retrieves `GET /explain/{transaction_id}`; pending, absent, and failed results are not presented as completed explanations. This button does not automatically poll.
 
-Use a unique transaction ID for each request. The demo generates one when supported by the browser; otherwise the API generates it. If a request times out, it may still have been processed. Keep the displayed ID and check its explanation before resubmitting. A reused ID returns HTTP 409.
+Use a unique transaction ID for each different transaction. The demo uses browser `randomUUID`, or secure random bytes from `getRandomValues` when needed. If neither generator works, enter an ID before scoring. If a request times out or the API reports a conflict, it may still have been processed. Check the saved explanation before deciding whether to retry. Use a new ID only for a different transaction.
 
 When a valid submitted ID is known, **Check explanation** remains available after a failed or timed-out scoring response. It queries that ID on the original API connection without resubmitting the transaction. A prediction naming a different ID is rejected, and an explanation with a missing or different ID is not displayed. Transaction status errors must also identify the same ID; generic service errors remain visible. The prediction stays hidden; a failed response does not establish whether the request was processed or saved. Editing the features, transaction ID or API URL, or reconnecting to the model, clears the score and lookup context.
 
-If the ID was left blank and the browser cannot generate a UUID, a failed response leaves no known submitted ID for this demo to query. It does not invent a lookup route. A validated successful response uses its returned ID for the normal explanation flow when that ID meets the lookup rules; otherwise no lookup is offered.
+The application does not initiate a second prediction automatically. A browser or network may still make repeated HTTP attempts after a connection failure. The database's unique explanation ID can reject a later duplicate insert, but scoring occurs before that check, so the same ID does not guarantee exactly one inference or one server arrival.
 
 The optional API URL supports a separate HTTP(S) API, but browser cross-origin access must be allowed by that server. Same-origin `/demo/` is the recommended setup. No API URL or transaction is saved in browser storage.
 

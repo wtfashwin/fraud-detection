@@ -110,14 +110,19 @@ if (typeof vm.SourceTextModule !== 'function') {
     assert.equal(demo.lookups().length, 0);
   });
 
-  test('blank ID without UUID support never invents a recovery query', async () => {
-    const demo = await createDemo({ uuid: false, predictions: [ambiguous] });
+  test('blank ID without a generator requires a manual ID before recovery can be needed', async () => {
+    const demo = await createDemo({ uuid: false, predictions: [{ status: 503, data: { detail: 'Queue unavailable' } }] });
     await demo.submit('');
-    assert.equal(demo.posts()[0].payload.transaction_id, undefined);
+    assert.equal(demo.posts().length, 0);
+    assert.match(demo.node('input-error').textContent, /enter.*transaction ID/i);
     assert.equal(demo.node('transaction-id').value, '');
     assert.equal(demo.visible('explanation-button'), false);
     await demo.lookup();
     assert.equal(demo.lookups().length, 0);
+    await demo.submit('manual-recovery-id');
+    assert.equal(demo.posts()[0].payload.transaction_id, 'manual-recovery-id');
+    await demo.lookup();
+    onlyLookup(demo, '/explain/manual-recovery-id');
   });
 
   test('a generated known ID supports recovery after failed confirmation', async () => {
@@ -129,16 +134,16 @@ if (typeof vm.SourceTextModule !== 'function') {
     onlyLookup(demo, '/explain/generated-fixture-id');
   });
 
-  test('successful server-generated ID still enables the normal explicit lookup', async () => {
+  test('a manual ID without a generator enables the normal explicit lookup', async () => {
     const demo = await createDemo({ uuid: false });
-    await demo.submit('');
-    assert.equal(demo.node('transaction-id').value, 'server-generated-fixture-id');
+    await demo.submit('manual-id');
+    assert.equal(demo.node('transaction-id').value, 'manual-id');
     assert.equal(demo.visible('explanation-button'), true);
     await demo.lookup();
-    onlyLookup(demo, '/explain/server-generated-fixture-id');
+    onlyLookup(demo, '/explain/manual-id');
   });
 
-  test('an invalid server-generated ID cannot retain an earlier recovery lookup', async () => {
+  test('blank ID cannot retain an earlier lookup and an invalid returned ID cannot replace a new manual ID', async () => {
     const demo = await createDemo({ uuid: false, predictions: [{}, { data: {
       transaction_id: 'bad/id', prediction: 1, score: 0.75,
       correlation_id: '00000000-0000-4000-8000-000000000001', explanation_status: 'Calculation queued',
@@ -146,14 +151,19 @@ if (typeof vm.SourceTextModule !== 'function') {
     await demo.submit('prior-success');
     assert.equal(demo.node('result-id').textContent, 'prior-success');
     await demo.submit('');
-    assert.equal(demo.posts().length, 2);
-    assert.equal(demo.posts()[1].payload.transaction_id, undefined);
-    assert.equal(demo.node('result').hidden, false);
-    assert.equal(demo.node('result-id').textContent, 'bad/id');
+    assert.equal(demo.posts().length, 1);
+    assert.equal(demo.node('result').hidden, true);
     assert.equal(demo.node('explanation-button').disabled, true);
     assert.equal(demo.visible('explanation-button'), false);
     await demo.lookup();
     assert.equal(demo.lookups().length, 0);
+    await demo.submit('next-id');
+    assert.equal(demo.posts().length, 2);
+    assert.equal(demo.posts()[1].payload.transaction_id, 'next-id');
+    assert.equal(demo.node('result').hidden, true);
+    assert.match(demo.node('input-error').textContent, /different transaction ID/i);
+    await demo.lookup();
+    onlyLookup(demo, '/explain/next-id');
   });
 
   test('a mismatched submitted ID rejects the prediction and retains its original recovery context', async () => {
@@ -285,25 +295,28 @@ if (typeof vm.SourceTextModule !== 'function') {
     assert.equal(demo.posts().length, 1);
   });
 
-  test('an ordinary 409 still advises entering a new transaction ID', async () => {
+  test('an ordinary 409 advises checking saved status before retrying', async () => {
     const demo = await createDemo({ predictions: [{ status: 409, data: { detail: 'Transaction ID already exists' } }] });
     await demo.submit('wanted-id');
-    assert.match(demo.node('input-error').textContent, /Enter a new transaction ID/i);
+    assert.match(demo.node('input-error').textContent, /check.*saved/i);
+    assert.match(demo.node('input-error').textContent, /new ID.*different transaction/i);
     assert.equal(demo.node('result').hidden, true);
     await demo.lookup();
     onlyLookup(demo, '/explain/wanted-id');
   });
 
-  test('structured prediction errors without a submitted ID retain the original no-ID behavior', async () => {
+  test('a structured prediction error is associated with the required manual ID', async () => {
     const demo = await createDemo({ uuid: false, predictions: [{ status: 503, data: {
       detail: { transaction_id: 'server-id', status: 'FAILED', message: 'Queue unavailable' },
     } }] });
     await demo.submit('');
-    assert.equal(demo.posts()[0].payload.transaction_id, undefined);
+    assert.equal(demo.posts().length, 0);
+    await demo.submit('server-id');
+    assert.equal(demo.posts()[0].payload.transaction_id, 'server-id');
     assert.match(demo.node('input-error').textContent, /server-id/);
-    assert.equal(demo.visible('explanation-button'), false);
+    assert.equal(demo.visible('explanation-button'), true);
     await demo.lookup();
-    assert.equal(demo.lookups().length, 0);
+    onlyLookup(demo, '/explain/server-id');
   });
 
   test('structured explanation status errors with missing or different IDs never display the unrelated detail', async () => {
