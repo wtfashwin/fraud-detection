@@ -8,7 +8,7 @@ The demo loads the required feature names and order from `GET /model-info`. Ente
 
 The model probability is not proof of fraud or a measured accuracy figure. Explanation status is shown separately. **Check explanation** retrieves `GET /explain/{transaction_id}`; pending, absent, and failed results are not presented as completed explanations. This button does not automatically poll.
 
-Use a unique transaction ID for each request. The demo generates one when supported by the browser; otherwise enter one before scoring. If a response is lost or times out, the request may still have been processed. Keep the ID, enter it in the transaction ID field if needed, and use **Check explanation** before deciding what to do next. The lookup shows the ID it checked and remains available without a received prediction. A reused ID returns HTTP 409. A missing explanation does not prove that the request was not processed.
+Use a unique transaction ID for each request. The demo generates one when supported by the browser; otherwise enter one before scoring. If a response is lost or times out, the request may still have been processed. Keep the ID, enter it in the transaction ID field if needed, and use **Check explanation** before deciding what to do next. The lookup shows the ID and selected API and remains available without a received prediction. The selected API may redirect the request, so it is not proof of which server responded. A reused ID returns HTTP 409. A missing explanation does not prove that the request was not processed.
 
 The optional API URL supports a separate HTTP(S) API, but browser cross-origin access must be allowed by that server. Same-origin `/demo/` is the recommended setup. No API URL or transaction is saved in browser storage.
 

@@ -35,7 +35,7 @@ const visible = (node) => { for (let n = node; n; n = n.parent) if (n.hidden) re
 const pause = () => new Promise((resolve) => setTimeout(resolve, 5));
 let instance = 0;
 
-async function startApp(context, { uuid = null, mode = 'success', explanations = {}, modelUnavailable = false } = {}) {
+async function startApp(context, { uuid = null, mode = 'success', explanations = {}, modelUnavailable = false, explanationRedirect = null } = {}) {
   const calls = [], saved = new Map(Object.entries(explanations));
   let releasePrediction;
   const predictionGate = new Promise((resolve) => { releasePrediction = resolve; });
@@ -59,8 +59,11 @@ async function startApp(context, { uuid = null, mode = 'success', explanations =
     }
     if (req.method === 'GET' && req.url.startsWith('/explain/')) {
       const id = decodeURIComponent(req.url.slice('/explain/'.length)); calls.push({ method: 'GET', path: req.url, id });
+      if (explanationRedirect) { res.writeHead(302, { Location: explanationRedirect }); return res.end(); }
       if (!saved.has(id)) { res.writeHead(404); return res.end(JSON.stringify({ detail: 'SHAP explanation not found' })); }
-      const result = saved.get(id); if (result.status === 'PENDING') res.writeHead(202);
+      const result = saved.get(id);
+      if (result.status === 'SERVER_ERROR') { res.writeHead(503); return res.end(JSON.stringify({ detail: 'Synthetic explanation unavailable' })); }
+      if (result.status === 'PENDING') res.writeHead(202);
       return res.end(JSON.stringify(result));
     }
     res.writeHead(500); return res.end(JSON.stringify({ detail: 'Unexpected test request' }));
@@ -304,4 +307,159 @@ test('lookup uses the newly validated API base when its model is unavailable', a
   await app.lookup();
   assert.deepEqual(received, ['/model-info', '/explain/saved-id']);
   assert.deepEqual(app.calls, []);
+});
+
+test('a lookup after switching APIs identifies the server that returned the record', async (context) => {
+  const callsB = [];
+  const other = createServer((req, res) => {
+    callsB.push(req.url); res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/model-info') return res.end(JSON.stringify({ feature_names: ['Amount'], feature_count: 1, model_source: 'server B' }));
+    if (req.url === '/explain/shared-id') return res.end(JSON.stringify({ transaction_id: 'shared-id', status: 'COMPLETED', base_value: 999, feature_names: ['Amount'], shap_values: [9], explanation_method: 'server B fixture' }));
+    res.writeHead(404); return res.end(JSON.stringify({ detail: 'Not found' }));
+  });
+  await new Promise((resolve) => other.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => other.close(resolve)));
+  const app = await startApp(context, { mode: 'lost' });
+  const originalBase = app.get('api-base').value;
+  const otherBase = `http://127.0.0.1:${other.address().port}`;
+  app.input('features', '[0]'); app.input('transaction-id', 'shared-id'); await app.submit();
+  const sent = app.calls.filter((call) => call.method === 'POST');
+  assert.ok(sent.length >= 1);
+  assert.ok(sent.every((call) => call.data.transaction_id === 'shared-id'));
+  app.input('api-base', otherBase);
+  await app.get('connection-form').listeners.submit({ preventDefault() {} });
+  assert.equal(app.get('transaction-id').value, 'shared-id');
+  await app.lookup();
+  assert.deepEqual(callsB, ['/model-info', '/explain/shared-id']);
+  assert.equal(app.calls.filter((call) => call.method === 'GET').length, 0);
+  assert.equal(JSON.parse(app.get('explanation-response').textContent).base_value, 999);
+  assert.ok(visible(app.get('explanation-message')));
+  assert.ok(app.get('explanation-message').textContent.includes(`Selected API: ${otherBase}`), 'The response must identify its selected API');
+  assert.ok(!app.get('explanation-message').textContent.includes(originalBase), 'The earlier API must not be presented as the lookup source');
+});
+
+test('pending, completed, missing and error lookup outcomes identify the selected API', async (context) => {
+  const app = await startApp(context, { explanations: {
+    'pending-id': { transaction_id: 'pending-id', status: 'PENDING' },
+    'completed-id': { transaction_id: 'completed-id', status: 'COMPLETED', base_value: 3 },
+    'failed-id': { transaction_id: 'failed-id', status: 'FAILED' },
+    'unavailable-id': { transaction_id: 'unavailable-id', status: 'SERVER_ERROR' },
+    'mismatched-id': { transaction_id: 'other-id', status: 'COMPLETED', base_value: 5 },
+  } });
+  const selectedBase = app.get('api-base').value;
+  for (const [id, expected] of [['pending-id', /pending/i], ['completed-id', /saved response/i],
+    ['failed-id', /failed/i], ['missing-id', /not found/i], ['unavailable-id', /could not retrieve/i],
+    ['mismatched-id', /could not retrieve/i]]) {
+    app.input('transaction-id', id);
+    await app.lookup();
+    const message = app.get('explanation-message');
+    assert.ok(visible(message));
+    assert.match(message.textContent, expected);
+    assert.ok(message.textContent.includes(`Selected API: ${selectedBase}`), `${id} outcome must identify the selected API`);
+  }
+});
+
+test('same server lookup outcomes identify this server after reload', async (context) => {
+  const app = await startApp(context, { explanations: {
+    'pending-id': { transaction_id: 'pending-id', status: 'PENDING' },
+    'completed-id': { transaction_id: 'completed-id', status: 'COMPLETED', base_value: 3 },
+    'failed-id': { transaction_id: 'failed-id', status: 'FAILED' },
+    'unavailable-id': { transaction_id: 'unavailable-id', status: 'SERVER_ERROR' },
+  } });
+  const actualServer = app.get('api-base').value;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (url, options) => originalFetch(new URL(url, actualServer), options);
+  context.after(() => { globalThis.fetch = originalFetch; });
+  app.input('api-base', '');
+  await app.get('connection-form').listeners.submit({ preventDefault() {} });
+  for (const [id, expected] of [['pending-id', /pending/i], ['completed-id', /saved response/i],
+    ['failed-id', /failed/i], ['missing-id', /not found/i], ['unavailable-id', /could not retrieve/i]]) {
+    app.input('transaction-id', id);
+    await app.lookup();
+    assert.match(app.get('explanation-message').textContent, expected);
+    assert.match(app.get('explanation-message').textContent, /Selected API: this server/i);
+  }
+});
+
+test('lookup identifies an API mounted below a path', async (context) => {
+  const other = createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/api/v1/model-info') return res.end(JSON.stringify({ feature_names: ['Amount'], feature_count: 1, model_source: 'synthetic' }));
+    if (req.url === '/api/v1/explain/saved-id') return res.end(JSON.stringify({ transaction_id: 'saved-id', status: 'PENDING' }));
+    res.writeHead(404); return res.end(JSON.stringify({ detail: 'Not found' }));
+  });
+  await new Promise((resolve) => other.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => other.close(resolve)));
+  const app = await startApp(context);
+  const mountedBase = `http://127.0.0.1:${other.address().port}/api/v1`;
+  app.input('api-base', `${mountedBase}/`);
+  await app.get('connection-form').listeners.submit({ preventDefault() {} });
+  app.input('transaction-id', 'saved-id');
+  await app.lookup();
+  assert.match(app.get('explanation-message').textContent, /pending/i);
+  assert.ok(app.get('explanation-message').textContent.includes(`Selected API: ${mountedBase}`));
+});
+
+test('a redirected lookup labels the selected API rather than claiming the responding server', async (context) => {
+  const redirectedPaths = [];
+  const respondingServer = createServer((req, res) => {
+    redirectedPaths.push(req.url); res.setHeader('Content-Type', 'application/json');
+    return res.end(JSON.stringify({ transaction_id: 'saved-id', status: 'COMPLETED', base_value: 999 }));
+  });
+  await new Promise((resolve) => respondingServer.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => respondingServer.close(resolve)));
+  const respondingBase = `http://127.0.0.1:${respondingServer.address().port}`;
+  const app = await startApp(context, { explanationRedirect: `${respondingBase}/explain/saved-id` });
+  const selectedBase = app.get('api-base').value;
+  app.input('transaction-id', 'saved-id');
+  await app.lookup();
+  assert.deepEqual(redirectedPaths, ['/explain/saved-id']);
+  assert.equal(JSON.parse(app.get('explanation-response').textContent).base_value, 999);
+  assert.ok(app.get('explanation-message').textContent.includes(`Selected API: ${selectedBase}`));
+  assert.ok(!app.get('explanation-message').textContent.includes(respondingBase));
+  assert.doesNotMatch(app.get('explanation-message').textContent, /\bSource:/);
+});
+
+test('credentials, queries and fragments in a changed API URL cannot appear as a lookup source', async (context) => {
+  const app = await startApp(context);
+  app.input('transaction-id', 'saved-id');
+  app.input('api-base', 'http://user:private-password@example.test/api?key=private-query#private-fragment');
+  await app.get('connection-form').listeners.submit({ preventDefault() {} });
+  assert.equal(app.get('explanation-button').disabled, true);
+  await app.lookup();
+  assert.deepEqual(app.calls, []);
+  assert.doesNotMatch(app.get('connection-error').textContent, /private-password|private-query|private-fragment/);
+  assert.doesNotMatch(app.get('explanation-message').textContent, /private-password|private-query|private-fragment/);
+});
+
+test('API selection and a second lookup are disabled while a lookup is in flight', async (context) => {
+  let releaseLookup;
+  const lookupGate = new Promise((resolve) => { releaseLookup = resolve; });
+  const requests = [];
+  const other = createServer(async (req, res) => {
+    requests.push(req.url); res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/model-info') return res.end(JSON.stringify({ feature_names: ['Amount'], feature_count: 1, model_source: 'synthetic' }));
+    if (req.url === '/explain/saved-id') {
+      await lookupGate;
+      return res.end(JSON.stringify({ transaction_id: 'saved-id', status: 'PENDING' }));
+    }
+    res.writeHead(404); return res.end(JSON.stringify({ detail: 'Not found' }));
+  });
+  await new Promise((resolve) => other.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => other.close(resolve)));
+  const app = await startApp(context);
+  const otherBase = `http://127.0.0.1:${other.address().port}`;
+  app.input('api-base', otherBase);
+  await app.get('connection-form').listeners.submit({ preventDefault() {} });
+  app.input('transaction-id', 'saved-id');
+  const pendingLookup = app.lookup();
+  try {
+    for (let i = 0; i < 400 && !requests.includes('/explain/saved-id'); i++) await pause();
+    assert.ok(requests.includes('/explain/saved-id'));
+    assert.equal(app.get('api-base').disabled, true);
+    assert.equal(app.get('explanation-button').disabled, true);
+    assert.ok(app.get('explanation-message').textContent.includes(`Selected API: ${otherBase}`));
+  } finally { releaseLookup(); await pendingLookup; }
+  assert.equal(app.get('api-base').disabled, false);
+  assert.equal(app.get('explanation-button').disabled, false);
 });

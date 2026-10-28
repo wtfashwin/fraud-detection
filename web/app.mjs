@@ -187,22 +187,26 @@ element('transaction').addEventListener('submit', async (event) => {
 element('explanation-button').addEventListener('click', async () => {
   const id = element('transaction-id').value.trim();
   if (!apiBaseValid || busy || !transactionIdPattern.test(id)) return;
+  const lookupBase = apiBase;
+  const sourceUrl = lookupBase ? new URL(lookupBase) : null;
+  const lookupSource = sourceUrl ? `${sourceUrl.origin}${sourceUrl.pathname.replace(/\/+$/, '')}` : 'this server';
+  const showLookupMessage = (message) => setMessage('explanation-message', `${message} Selected API: ${lookupSource}.`);
   busy = true;
   updateControls();
-  setMessage('explanation-message', `Checking for a saved explanation for ${id}…`);
+  showLookupMessage(`Checking for a saved explanation for ${id}…`);
   element('explanation-response').hidden = true;
   try {
-    const explanation = await fetchJson(`${apiBase}/explain/${encodeURIComponent(id)}`);
+    const explanation = await fetchJson(`${lookupBase}/explain/${encodeURIComponent(id)}`);
     if (explanation.transaction_id !== id) throw new Error('The API returned an explanation for a different transaction ID.');
     if (explanation.status === 'PENDING') {
-      setMessage('explanation-message', `The API reports the explanation for ${id} is pending. Check again later.`);
+      showLookupMessage(`The API reports the explanation for ${id} is pending. Check again later.`);
     } else {
       element('explanation-response').textContent = JSON.stringify(explanation, null, 2);
       element('explanation-response').hidden = false;
-      setMessage('explanation-message', explanation.status === 'FAILED' ? `The API reports explanation processing failed for ${id}.` : `Saved response received for ${id}. Method and units are included when supplied.`);
+      showLookupMessage(explanation.status === 'FAILED' ? `The API reports explanation processing failed for ${id}.` : `Saved response received for ${id}. Method and units are included when supplied.`);
     }
   } catch (error) {
-    setMessage('explanation-message', error.status === 404 ? `Saved explanation not found for ${id}. This does not establish whether the request was processed.` : `Could not retrieve the explanation for ${id}. ${error.message}`);
+    showLookupMessage(error.status === 404 ? `Saved explanation not found for ${id}. This does not establish whether the request was processed.` : `Could not retrieve the explanation for ${id}. ${error.message}`);
   } finally {
     busy = false;
     updateControls();
