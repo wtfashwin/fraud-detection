@@ -7,6 +7,15 @@ let prediction = null;
 let requestContext = null;
 let busy = false;
 const validTransactionId = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
+const transactionErrorStates = new Set(['PENDING', 'PROCESSING', 'QUEUED', 'COMPLETED', 'FAILED', 'DISPATCH_UNCONFIRMED']);
+
+function hasUnverifiedTransactionError(error, expectedId) {
+  const detail = error?.detail;
+  if (!expectedId || !detail || typeof detail !== 'object' || Array.isArray(detail)) return false;
+  const hasId = Object.prototype.hasOwnProperty.call(detail, 'transaction_id');
+  const hasTransactionStatus = typeof detail.status === 'string' && transactionErrorStates.has(detail.status.toUpperCase());
+  return (hasId || hasTransactionStatus) && detail.transaction_id !== expectedId;
+}
 
 function setMessage(id, message) {
   const node = element(id);
@@ -145,7 +154,11 @@ element('transaction').addEventListener('submit', async (event) => {
   updateControls();
   setMessage('request-status', 'Scoring with the connected API…');
   try {
-    prediction = validatePrediction(await fetchJson(`${submittedBase}/predict`, { method: 'POST', body: JSON.stringify(payload) }));
+    const response = validatePrediction(await fetchJson(`${submittedBase}/predict`, { method: 'POST', body: JSON.stringify(payload) }));
+    if (payload.transaction_id && response.transaction_id !== payload.transaction_id) {
+      throw new Error('The API returned a different transaction ID.');
+    }
+    prediction = response;
     requestContext = validTransactionId(prediction.transaction_id)
       ? { transactionId: prediction.transaction_id, apiBase: submittedBase }
       : null;
@@ -164,9 +177,12 @@ element('transaction').addEventListener('submit', async (event) => {
   } catch (error) {
     prediction = null;
     setMessage('request-status', '');
-    setMessage('input-error', `${error.message}${error.status === 409 ? ' Enter a new transaction ID before scoring again.' : ''}`);
+    const unverified = hasUnverifiedTransactionError(error, requestContext?.transactionId);
+    const message = unverified
+      ? 'The API returned an error with a missing or different transaction ID.' : error.message;
+    setMessage('input-error', `${message}${!unverified && error.status === 409 ? ' Enter a new transaction ID before scoring again.' : ''}`);
     setMessage('explanation-message', requestContext
-      ? `No prediction was received. Check saved status for ${requestContext.transactionId}; this does not confirm that it was saved.`
+      ? `No valid prediction was received. Check saved status for ${requestContext.transactionId}; this does not confirm that it was saved.`
       : '');
   } finally {
     busy = false;
@@ -183,6 +199,9 @@ element('explanation-button').addEventListener('click', async () => {
   element('explanation-response').hidden = true;
   try {
     const explanation = await fetchJson(`${lookup.apiBase}/explain/${encodeURIComponent(lookup.transactionId)}`);
+    if (explanation?.transaction_id !== lookup.transactionId) {
+      throw new Error('The API returned an explanation with a missing or different transaction ID.');
+    }
     if (explanation.status === 'PENDING') {
       setMessage('explanation-message', 'The API reports this explanation is pending. Check again later.');
     } else {
@@ -191,7 +210,10 @@ element('explanation-button').addEventListener('click', async () => {
       setMessage('explanation-message', explanation.status === 'FAILED' ? 'The API reports explanation processing failed.' : 'Saved response received from the API. Method and units are included when supplied.');
     }
   } catch (error) {
-    setMessage('explanation-message', error.status === 404 ? 'No saved explanation was found. It may still be pending; check again later.' : error.message);
+    const message = hasUnverifiedTransactionError(error, lookup.transactionId)
+      ? 'The API returned an error with a missing or different transaction ID.'
+      : error.status === 404 ? 'No saved explanation was found. It may still be pending; check again later.' : error.message;
+    setMessage('explanation-message', message);
   } finally {
     busy = false;
     updateControls();

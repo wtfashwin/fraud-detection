@@ -66,6 +66,7 @@ export async function fetchJson(url, options = {}) {
     if (!response.ok) {
       const error = new Error(`HTTP ${response.status}: ${errorDetail(data.detail)}`);
       error.status = response.status;
+      error.detail = data.detail;
       throw error;
     }
     return data;

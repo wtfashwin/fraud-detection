@@ -138,20 +138,67 @@ if (typeof vm.SourceTextModule !== 'function') {
     onlyLookup(demo, '/explain/server-generated-fixture-id');
   });
 
-  test('validated success associates lookup with the returned ID instead of the submitted ID', async () => {
-    const demo = await createDemo({ predictions: [{ data: {
+  test('an invalid server-generated ID cannot retain an earlier recovery lookup', async () => {
+    const demo = await createDemo({ uuid: false, predictions: [{}, { data: {
+      transaction_id: 'bad/id', prediction: 1, score: 0.75,
+      correlation_id: '00000000-0000-4000-8000-000000000001', explanation_status: 'Calculation queued',
+    } }] });
+    await demo.submit('prior-success');
+    assert.equal(demo.node('result-id').textContent, 'prior-success');
+    await demo.submit('');
+    assert.equal(demo.posts().length, 2);
+    assert.equal(demo.posts()[1].payload.transaction_id, undefined);
+    assert.equal(demo.node('result').hidden, false);
+    assert.equal(demo.node('result-id').textContent, 'bad/id');
+    assert.equal(demo.node('explanation-button').disabled, true);
+    assert.equal(demo.visible('explanation-button'), false);
+    await demo.lookup();
+    assert.equal(demo.lookups().length, 0);
+  });
+
+  test('a mismatched submitted ID rejects the prediction and retains its original recovery context', async () => {
+    const demo = await createDemo({ apiBase: 'https://fixture.invalid/api/', predictions: [{ data: {
       transaction_id: 'returned-id-B', prediction: 1, score: 0.75,
       correlation_id: '00000000-0000-4000-8000-000000000001', explanation_status: 'Calculation queued',
     } }] });
     await demo.submit('submitted-id-A');
-    assert.equal(demo.node('result-id').textContent, 'returned-id-B');
-    assert.equal(demo.node('transaction-id').value, 'returned-id-B');
+    assert.equal(demo.posts()[0].payload.transaction_id, 'submitted-id-A');
+    assert.equal(demo.node('result').hidden, true);
+    assert.equal(demo.node('result-id').textContent, '');
+    assert.equal(demo.node('probability').textContent, '');
+    assert.equal(demo.node('transaction-id').value, 'submitted-id-A');
+    assert.match(demo.node('input-error').textContent, /different transaction ID/i);
+    assert.equal(demo.visible('explanation-button'), true);
+    assert.equal(demo.lookups().length, 0);
     await demo.lookup();
-    onlyLookup(demo, '/explain/returned-id-B');
-    assert.equal(demo.lookups().some((request) => request.url.endsWith('/submitted-id-A')), false);
+    onlyLookup(demo, 'https://fixture.invalid/api/explain/submitted-id-A');
   });
 
-  test('a returned ID outside lookup rules cannot retain an earlier request context', async () => {
+  test('a mismatched browser-generated ID keeps recovery bound to that generated ID', async () => {
+    const demo = await createDemo({ predictions: [{ data: {
+      transaction_id: 'returned-id-B', prediction: 1, score: 0.75,
+      correlation_id: '00000000-0000-4000-8000-000000000001', explanation_status: 'Calculation queued',
+    } }] });
+    await demo.submit('');
+    assert.equal(demo.posts()[0].payload.transaction_id, 'generated-fixture-id');
+    assert.equal(demo.node('result').hidden, true);
+    assert.equal(demo.node('transaction-id').value, 'generated-fixture-id');
+    assert.match(demo.node('input-error').textContent, /different transaction ID/i);
+    await demo.lookup();
+    onlyLookup(demo, '/explain/generated-fixture-id');
+  });
+
+  test('matching browser-generated ID still shows the prediction and supports lookup', async () => {
+    const demo = await createDemo();
+    await demo.submit('');
+    assert.equal(demo.posts()[0].payload.transaction_id, 'generated-fixture-id');
+    assert.equal(demo.node('result').hidden, false);
+    assert.equal(demo.node('result-id').textContent, 'generated-fixture-id');
+    await demo.lookup();
+    onlyLookup(demo, '/explain/generated-fixture-id');
+  });
+
+  test('a mismatched invalid returned ID cannot replace the submitted recovery context', async () => {
     for (const returnedId of ['bad/id', 'x'.repeat(129)]) {
       const demo = await createDemo({ predictions: [{}, { data: {
         transaction_id: returnedId, prediction: 1, score: 0.75,
@@ -159,12 +206,157 @@ if (typeof vm.SourceTextModule !== 'function') {
       } }] });
       await demo.submit('prior-success');
       await demo.submit('submitted-id-A');
-      assert.equal(demo.node('result-id').textContent, returnedId);
-      assert.equal(demo.node('probability').textContent, '75.00%');
-      assert.equal(demo.node('explanation-button').disabled, true);
-      assert.equal(demo.visible('explanation-button'), false);
+      assert.equal(demo.node('result').hidden, true);
+      assert.equal(demo.node('result-id').textContent, '');
+      assert.equal(demo.node('probability').textContent, '');
+      assert.equal(demo.node('transaction-id').value, 'submitted-id-A');
+      assert.match(demo.node('input-error').textContent, /different transaction ID/i);
+      assert.equal(demo.visible('explanation-button'), true);
       await demo.lookup();
-      assert.equal(demo.lookups().length, 0);
+      onlyLookup(demo, '/explain/submitted-id-A');
+    }
+  });
+
+  test('mismatched or absent IDs in explanation responses never display unrelated status or values', async () => {
+    for (const fixture of [
+      { status: 202, data: { transaction_id: 'other-id', status: 'PENDING' } },
+      { status: 200, data: { transaction_id: 'other-id', status: 'COMPLETED', shap_values: [3], feature_names: ['Amount'], base_value: 0 } },
+      { status: 202, data: { status: 'PENDING' } },
+    ]) {
+      const demo = await createDemo({ apiBase: 'https://fixture.invalid/api/', predictions: [ambiguous], explanations: [fixture] });
+      await demo.submit('recover-id-A');
+      await demo.lookup();
+      onlyLookup(demo, 'https://fixture.invalid/api/explain/recover-id-A');
+      assert.equal(demo.node('explanation-response').hidden, true);
+      assert.match(demo.node('explanation-message').textContent, /different transaction ID/i);
+      assert.equal(demo.node('result').hidden, true);
+      assert.equal(demo.visible('explanation-button'), true);
+      await demo.lookup();
+      assert.equal(demo.lookups().length, 2);
+      assert.equal(demo.lookups()[1].url, 'https://fixture.invalid/api/explain/recover-id-A');
+      assert.match(demo.node('explanation-message').textContent, /pending/i);
+      assert.equal(demo.posts().length, 1);
+    }
+  });
+
+  test('structured prediction status errors with missing or different IDs keep the original recovery context', async () => {
+    for (const detail of [
+      { transaction_id: 'other-id', status: 'DISPATCH_UNCONFIRMED', message: 'Queue state unknown' },
+      { status: 'DISPATCH_UNCONFIRMED', message: 'Queue state unknown' },
+      { transaction_id: null, status: 'dispatch_unconfirmed', message: 'Queue state unknown' },
+    ]) {
+      const demo = await createDemo({ apiBase: 'https://fixture.invalid/api/', predictions: [{ status: 503, data: { detail } }] });
+      await demo.submit('wanted-id');
+      assert.equal(demo.node('result').hidden, true);
+      assert.match(demo.node('input-error').textContent, /missing or different transaction ID/i);
+      assert.doesNotMatch(demo.node('input-error').textContent, /other-id|DISPATCH_UNCONFIRMED/);
+      assert.equal(demo.node('transaction-id').value, 'wanted-id');
+      await demo.lookup();
+      onlyLookup(demo, 'https://fixture.invalid/api/explain/wanted-id');
+    }
+  });
+
+  test('matching structured prediction status and generic errors remain informative', async () => {
+    for (const [detail, expected] of [
+      [{ transaction_id: 'wanted-id', status: 'DISPATCH_UNCONFIRMED', message: 'Queue state unknown' }, /DISPATCH_UNCONFIRMED/],
+      ['Explanation storage is unavailable', /Explanation storage is unavailable/],
+      [{ message: 'Explanation storage is unavailable' }, /Explanation storage is unavailable/],
+      [{ status: 'UNAVAILABLE', message: 'Explanation storage is unavailable' }, /Explanation storage is unavailable/],
+    ]) {
+      const demo = await createDemo({ predictions: [{ status: 503, data: { detail } }] });
+      await demo.submit('wanted-id');
+      assert.match(demo.node('input-error').textContent, expected);
+      assert.equal(demo.node('result').hidden, true);
+      await demo.lookup();
+      onlyLookup(demo, '/explain/wanted-id');
+    }
+  });
+
+  test('a 409 with an unrelated transaction ID never advises retrying with a new ID', async () => {
+    const demo = await createDemo({ predictions: [{ status: 409, data: {
+      detail: { transaction_id: 'other-id', status: 'FAILED', message: 'Duplicate ID' },
+    } }] });
+    await demo.submit('wanted-id');
+    assert.match(demo.node('input-error').textContent, /missing or different transaction ID/i);
+    assert.doesNotMatch(demo.node('input-error').textContent, /other-id|Enter a new transaction ID/i);
+    assert.equal(demo.node('result').hidden, true);
+    await demo.lookup();
+    onlyLookup(demo, '/explain/wanted-id');
+    assert.equal(demo.posts().length, 1);
+  });
+
+  test('an ordinary 409 still advises entering a new transaction ID', async () => {
+    const demo = await createDemo({ predictions: [{ status: 409, data: { detail: 'Transaction ID already exists' } }] });
+    await demo.submit('wanted-id');
+    assert.match(demo.node('input-error').textContent, /Enter a new transaction ID/i);
+    assert.equal(demo.node('result').hidden, true);
+    await demo.lookup();
+    onlyLookup(demo, '/explain/wanted-id');
+  });
+
+  test('structured prediction errors without a submitted ID retain the original no-ID behavior', async () => {
+    const demo = await createDemo({ uuid: false, predictions: [{ status: 503, data: {
+      detail: { transaction_id: 'server-id', status: 'FAILED', message: 'Queue unavailable' },
+    } }] });
+    await demo.submit('');
+    assert.equal(demo.posts()[0].payload.transaction_id, undefined);
+    assert.match(demo.node('input-error').textContent, /server-id/);
+    assert.equal(demo.visible('explanation-button'), false);
+    await demo.lookup();
+    assert.equal(demo.lookups().length, 0);
+  });
+
+  test('structured explanation status errors with missing or different IDs never display the unrelated detail', async () => {
+    for (const detail of [
+      { transaction_id: 'other-id', status: 'FAILED', message: 'Explanation failed' },
+      { status: 'FAILED', message: 'Explanation failed' },
+      { transaction_id: null, status: 'failed', message: 'Explanation failed' },
+    ]) {
+      const demo = await createDemo({ apiBase: 'https://fixture.invalid/api/', predictions: [ambiguous],
+        explanations: [{ status: 503, data: { detail } }] });
+      await demo.submit('wanted-id');
+      await demo.lookup();
+      onlyLookup(demo, 'https://fixture.invalid/api/explain/wanted-id');
+      assert.equal(demo.node('explanation-response').hidden, true);
+      assert.match(demo.node('explanation-message').textContent, /missing or different transaction ID/i);
+      assert.doesNotMatch(demo.node('explanation-message').textContent, /other-id|FAILED/);
+      assert.equal(demo.visible('explanation-button'), true);
+    }
+  });
+
+  test('matching structured explanation status and generic 503 or 404 errors remain informative', async () => {
+    for (const fixture of [
+      { status: 503, data: { detail: { transaction_id: 'wanted-id', status: 'FAILED', message: 'Explanation failed' } }, expected: /FAILED/ },
+      { status: 503, data: { detail: 'Explanation storage is unavailable' }, expected: /Explanation storage is unavailable/ },
+      { status: 503, data: { detail: { message: 'Explanation storage is unavailable' } }, expected: /Explanation storage is unavailable/ },
+      { status: 503, data: { detail: { status: 'UNAVAILABLE', message: 'Explanation storage is unavailable' } }, expected: /Explanation storage is unavailable/ },
+      { status: 404, data: { detail: 'SHAP explanation not found' }, expected: /No saved explanation/ },
+      { status: 404, data: { detail: { message: 'SHAP explanation not found' } }, expected: /No saved explanation/ },
+      { status: 404, data: { detail: { transaction_id: 'wanted-id', status: 'FAILED' } }, expected: /No saved explanation/ },
+    ]) {
+      const demo = await createDemo({ predictions: [ambiguous], explanations: [fixture] });
+      await demo.submit('wanted-id');
+      await demo.lookup();
+      assert.match(demo.node('explanation-message').textContent, fixture.expected);
+      assert.doesNotMatch(demo.node('explanation-message').textContent, /other-id/);
+      assert.equal(demo.node('explanation-response').hidden, true);
+    }
+  });
+
+  test('structured 404 identity mismatch or absence is not reported as a missing saved explanation', async () => {
+    for (const detail of [
+      { transaction_id: 'other-id', status: 'FAILED' },
+      { status: 'FAILED', message: 'No saved explanation' },
+    ]) {
+      const demo = await createDemo({ apiBase: 'https://fixture.invalid/api/', predictions: [ambiguous],
+        explanations: [{ status: 404, data: { detail } }] });
+      await demo.submit('wanted-id');
+      await demo.lookup();
+      onlyLookup(demo, 'https://fixture.invalid/api/explain/wanted-id');
+      assert.match(demo.node('explanation-message').textContent, /missing or different transaction ID/i);
+      assert.doesNotMatch(demo.node('explanation-message').textContent, /other-id|No saved explanation/i);
+      assert.equal(demo.node('explanation-response').hidden, true);
+      assert.equal(demo.visible('explanation-button'), true);
     }
   });
 
@@ -192,7 +384,7 @@ if (typeof vm.SourceTextModule !== 'function') {
 
   for (const fixture of [
     { status: 404, data: { detail: 'SHAP explanation not found' }, message: /No saved explanation/ },
-    { status: 503, data: { detail: { status: 'FAILED', message: 'Explanation calculation failed' } }, message: /FAILED/ },
+    { status: 503, data: { detail: { transaction_id: 'recover-id', status: 'FAILED', message: 'Explanation calculation failed' } }, message: /FAILED/ },
     { status: 200, data: { transaction_id: 'recover-id', status: 'COMPLETED', shap_values: [0, 0, 0], feature_names: ['Time', 'V1', 'Amount'], base_value: 0, explanation_method: 'fixed fixture' }, message: /Saved response/ },
   ]) {
     test(`explicit ${fixture.status} saved-status response never restores a prediction`, async () => {
