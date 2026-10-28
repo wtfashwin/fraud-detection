@@ -1,6 +1,7 @@
 from logging.config import fileConfig
 import os
 from sqlalchemy import engine_from_config
+from sqlalchemy.engine import URL
 from sqlalchemy import pool
 from alembic import context
 
@@ -11,16 +12,18 @@ fileConfig(config.config_file_name)
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from db.models import Base
+from db.config import database_url
 
-db_url = os.getenv('DATABASE_URL', 'postgresql+psycopg2://postgres:postgres@postgres:5432/fraud')
-config.set_main_option('sqlalchemy.url', db_url.replace('%', '%%'))
+db_url = database_url()
+if not isinstance(db_url, URL):
+    config.set_main_option('sqlalchemy.url', db_url.replace('%', '%%'))
+    db_url = config.get_main_option('sqlalchemy.url')
 
 target_metadata = Base.metadata
 
 def run_migrations_offline():
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url, target_metadata=target_metadata, literal_binds=True
+        url=db_url, target_metadata=target_metadata, literal_binds=True
     )
 
     with context.begin_transaction():
@@ -28,8 +31,10 @@ def run_migrations_offline():
 
 
 def run_migrations_online():
+    options = config.get_section(config.config_ini_section)
+    options['sqlalchemy.url'] = db_url
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section),
+        options,
         prefix='sqlalchemy.',
         poolclass=pool.NullPool,
     )

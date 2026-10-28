@@ -4,7 +4,11 @@ x-app: &app
   build:
     context: .
   environment: &app-env
-    DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    DATABASE_URL: fraud+compose://components
+    FRAUD_COMPOSE_DATABASE: '1'
+    FRAUD_COMPOSE_DB_USER: ${POSTGRES_USER}
+    FRAUD_COMPOSE_DB_PASSWORD: ${POSTGRES_PASSWORD}
+    FRAUD_COMPOSE_DB_NAME: ${POSTGRES_DB}
     CELERY_BROKER_URL: redis://redis:6379/0
     MODEL_DIR: /app/models
   restart: unless-stopped

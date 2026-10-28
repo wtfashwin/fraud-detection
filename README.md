@@ -52,6 +52,10 @@ In the demo, choose **Fill synthetic example**, then **Score transaction**. Use 
 
 [`.env.example`](.env.example) supplies demonstration values directly to Compose; no shell export is needed for the commands above.
 
+For a literal dollar sign in a private Compose env file, single-quote the value, for example `POSTGRES_PASSWORD='synthetic$example'`. Compose expands variables in unquoted and double-quoted env-file values. The Compose database user, password, and database name must all be nonempty.
+
+Compose passes these database settings to the API and worker as separate environment fields. The base services set `DATABASE_URL` to the reserved `fraud+compose://components` marker instead of a usable full URL; this marker selects the separate fields only when the Compose mode is enabled. A different `DATABASE_URL` deliberately set in a service override takes precedence, including an empty value. A host `DATABASE_URL` is not passed into the service automatically. Container environment values remain visible to Docker administrators; do not share expanded Compose configuration or environment dumps.
+
 | Variable | Purpose |
 | --- | --- |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | Local database credentials and database name. |
