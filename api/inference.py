@@ -108,13 +108,53 @@ class InferenceBundle:
             method = "linear_log_odds_zero_reference"
         else:
             import shap
+            classes = np.asarray(getattr(model, "classes_", []))
+            scoring_classes = np.asarray(getattr(self.model, "classes_", []))
+            single_fraud_class = classes.shape == (1,) and classes[0] == 1
+            binary_classes = (classes.shape == (2,) and np.count_nonzero(classes == 0) == 1
+                              and np.count_nonzero(classes == 1) == 1)
+            if not (single_fraud_class or binary_classes) or not np.array_equal(classes, scoring_classes):
+                raise ValueError("Tree explanation requires matching binary scoring classes 0 and 1")
+            fraud_index = int(np.flatnonzero(classes == 1)[0])
             explainer = shap.TreeExplainer(model)
             values = np.asarray(explainer.shap_values(data))
-            if values.shape == (1, len(explanation_columns), 2):
-                values = values[:, :, 1]
-            values = values.reshape(-1)
             base = np.asarray(explainer.expected_value).reshape(-1)
-            base_value = float(base[-1])
+            if binary_classes and values.shape == (1, len(explanation_columns), 2) and base.shape == (2,):
+                values = values[0, :, fraud_index]
+                base_value = float(base[fraud_index])
+            elif values.shape == (1, len(explanation_columns)) and base.shape == (1,):
+                tree_output = getattr(explainer.model, "tree_output", None)
+                if single_fraud_class and tree_output == "probability":
+                    values = values[0]
+                    base_value = float(base[0])
+                elif binary_classes and tree_output == "log_odds":
+                    # A single binary raw margin describes classes_[1]. Its opposite
+                    # has negated contributions and base.
+                    values = values[0]
+                    base_value = float(base[0])
+                    from sklearn.dummy import DummyClassifier
+                    from sklearn.ensemble import GradientBoostingClassifier
+                    if isinstance(model, GradientBoostingClassifier):
+                        if (type(model) is not GradientBoostingClassifier
+                                or type(model.init_) is not DummyClassifier
+                                or model.init_.strategy not in {"prior", "uniform", "most_frequent", "constant"}):
+                            raise ValueError("Unsupported gradient boosting initial estimator")
+                        # SHAP 0.49 uses the class prior for its initial offset.
+                        # Sklearn may use a different deterministic initializer
+                        # or half a logit for exponential loss.
+                        init = np.asarray(model._raw_predict_init(data), dtype=float).reshape(-1)
+                        offset = np.asarray(explainer.model.base_offset, dtype=float).reshape(-1)
+                        if (init.shape != (1,) or offset.shape != (1,)
+                                or not np.isfinite(init).all() or not np.isfinite(offset).all()):
+                            raise ValueError("Tree explanation has invalid initial margin shape")
+                        base_value += float(init[0] - offset[0])
+                    if fraud_index == 0:
+                        values = -values
+                        base_value = -base_value
+                else:
+                    raise ValueError("Unsupported single-output tree explanation")
+            else:
+                raise ValueError("Tree explanation has invalid shape")
             method = "tree_shap_raw_output"
         values = np.asarray(values, dtype=float).reshape(-1)
         if len(values) != len(explanation_columns) or not np.isfinite(values).all() or not np.isfinite(base_value):
