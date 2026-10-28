@@ -3,8 +3,11 @@ import { normalizeApiBase, validateFeatures, validateModelInfo, validatePredicti
 const element = (id) => document.getElementById(id);
 let modelInfo = null;
 let apiBase = '';
+let apiBaseValid = false;
 let prediction = null;
+let confirmedTransactionId = null;
 let busy = false;
+const transactionIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 
 function setMessage(id, message) {
   const node = element(id);
@@ -19,7 +22,7 @@ function updateControls() {
   element('sample-button').disabled = busy || !modelInfo;
   element('features').disabled = busy;
   element('transaction-id').disabled = busy;
-  element('explanation-button').disabled = busy || !prediction;
+  element('explanation-button').disabled = busy || !apiBaseValid || !transactionIdPattern.test(element('transaction-id').value.trim());
   element('result-panel').setAttribute('aria-busy', String(busy));
   element('score-button').textContent = busy ? 'Please wait…' : 'Score transaction';
 }
@@ -38,6 +41,7 @@ async function connect(event) {
   event?.preventDefault();
   if (busy) return;
   modelInfo = null;
+  apiBaseValid = false;
   clearResult();
   busy = true;
   updateControls();
@@ -48,7 +52,10 @@ async function connect(event) {
   element('feature-order').replaceChildren();
   element('feature-count').textContent = '';
   try {
-    apiBase = normalizeApiBase(element('api-base').value);
+    const nextBase = normalizeApiBase(element('api-base').value);
+    if (nextBase !== apiBase) confirmedTransactionId = null;
+    apiBase = nextBase;
+    apiBaseValid = true;
     modelInfo = validateModelInfo(await fetchJson(`${apiBase}/model-info`));
     element('docs-link').href = `${apiBase}/docs`;
     element('feature-count').textContent = `(${modelInfo.feature_count} values)`;
@@ -74,6 +81,8 @@ async function connect(event) {
 element('connection-form').addEventListener('submit', connect);
 element('api-base').addEventListener('input', () => {
   modelInfo = null;
+  apiBaseValid = false;
+  confirmedTransactionId = null;
   clearResult();
   element('connection-status').textContent = 'URL changed. Reconnect to load this model.';
   element('connection-status').dataset.state = 'loading';
@@ -85,7 +94,10 @@ element('sample-button').addEventListener('click', () => {
   if (!modelInfo || busy) return;
   const values = modelInfo.feature_names.map((name) => name === 'Amount' ? 100 : 0);
   element('features').value = JSON.stringify(values);
-  element('transaction-id').value = '';
+  if (confirmedTransactionId && element('transaction-id').value.trim() === confirmedTransactionId) {
+    element('transaction-id').value = '';
+    confirmedTransactionId = null;
+  }
   // The example is an arbitrary input vector; it carries no expected class or score.
   element('sample-note').textContent = modelInfo.feature_names.includes('Amount')
     ? 'Synthetic example: zeros for all features except Amount = 100. This is invented input for testing the request flow, with no expected fraud outcome.'
@@ -98,6 +110,7 @@ element('sample-button').addEventListener('click', () => {
 
 for (const id of ['features', 'transaction-id']) {
   element(id).addEventListener('input', () => {
+    if (id === 'transaction-id') confirmedTransactionId = null;
     clearResult();
     setMessage('input-error', '');
     element(id).removeAttribute('aria-invalid');
@@ -118,14 +131,15 @@ element('transaction').addEventListener('submit', async (event) => {
     const features = validateFeatures(element('features').value, modelInfo.feature_count);
     invalidField = 'transaction-id';
     let transactionId = element('transaction-id').value.trim();
-    if (transactionId && !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(transactionId)) {
+    if (transactionId && !transactionIdPattern.test(transactionId)) {
       throw new Error('Use 1–128 letters, numbers, dots, underscores, colons, or hyphens for the ID. Start with a letter or number.');
     }
-    if (!transactionId && globalThis.crypto?.randomUUID) {
+    if (!transactionId && typeof globalThis.crypto?.randomUUID === 'function') {
       transactionId = crypto.randomUUID();
-      element('transaction-id').value = transactionId;
     }
-    payload = { features, ...(transactionId ? { transaction_id: transactionId } : {}) };
+    if (!transactionId) throw new Error('Enter a unique transaction ID. This browser cannot generate one automatically.');
+    element('transaction-id').value = transactionId;
+    payload = { features, transaction_id: transactionId };
   } catch (error) {
     setMessage('input-error', error.message);
     element(invalidField).setAttribute('aria-invalid', 'true');
@@ -136,7 +150,10 @@ element('transaction').addEventListener('submit', async (event) => {
   updateControls();
   setMessage('request-status', 'Scoring with the connected API…');
   try {
+    confirmedTransactionId = null;
     prediction = validatePrediction(await fetchJson(`${apiBase}/predict`, { method: 'POST', body: JSON.stringify(payload) }));
+    if (prediction.transaction_id !== payload.transaction_id) throw new Error('The API returned a different transaction ID.');
+    confirmedTransactionId = payload.transaction_id;
     element('prediction-label').textContent = prediction.prediction === 1 ? 'Flagged as fraud · class 1' : 'Not flagged as fraud · class 0';
     element('prediction-label').dataset.fraud = String(prediction.prediction === 1);
     element('probability').textContent = formatProbability(prediction.score);
@@ -151,8 +168,16 @@ element('transaction').addEventListener('submit', async (event) => {
     element('result-title').focus();
   } catch (error) {
     prediction = null;
+    confirmedTransactionId = null;
     setMessage('request-status', '');
-    setMessage('input-error', `${error.message}${error.status === 409 ? ' Enter a new transaction ID before scoring again.' : ''}`);
+    const id = element('transaction-id').value.trim();
+    if (error.status === 409) {
+      setMessage('input-error', `This transaction ID already exists. Check the saved explanation for ${id} before deciding what to do next.`);
+    } else if (error.status === 422) {
+      setMessage('input-error', error.message);
+    } else {
+      setMessage('input-error', `${error.message} This request may have been processed. Check the saved explanation for ${id} before retrying.`);
+    }
   } finally {
     busy = false;
     updateControls();
@@ -160,22 +185,24 @@ element('transaction').addEventListener('submit', async (event) => {
 });
 
 element('explanation-button').addEventListener('click', async () => {
-  if (!prediction || busy) return;
+  const id = element('transaction-id').value.trim();
+  if (!apiBaseValid || busy || !transactionIdPattern.test(id)) return;
   busy = true;
   updateControls();
-  setMessage('explanation-message', 'Checking for a saved explanation…');
+  setMessage('explanation-message', `Checking for a saved explanation for ${id}…`);
   element('explanation-response').hidden = true;
   try {
-    const explanation = await fetchJson(`${apiBase}/explain/${encodeURIComponent(prediction.transaction_id)}`);
+    const explanation = await fetchJson(`${apiBase}/explain/${encodeURIComponent(id)}`);
+    if (explanation.transaction_id !== id) throw new Error('The API returned an explanation for a different transaction ID.');
     if (explanation.status === 'PENDING') {
-      setMessage('explanation-message', 'The API reports this explanation is pending. Check again later.');
+      setMessage('explanation-message', `The API reports the explanation for ${id} is pending. Check again later.`);
     } else {
       element('explanation-response').textContent = JSON.stringify(explanation, null, 2);
       element('explanation-response').hidden = false;
-      setMessage('explanation-message', explanation.status === 'FAILED' ? 'The API reports explanation processing failed.' : 'Saved response received from the API. Method and units are included when supplied.');
+      setMessage('explanation-message', explanation.status === 'FAILED' ? `The API reports explanation processing failed for ${id}.` : `Saved response received for ${id}. Method and units are included when supplied.`);
     }
   } catch (error) {
-    setMessage('explanation-message', error.status === 404 ? 'No saved explanation was found. It may still be pending; check again later.' : error.message);
+    setMessage('explanation-message', error.status === 404 ? `Saved explanation not found for ${id}. This does not establish whether the request was processed.` : `Could not retrieve the explanation for ${id}. ${error.message}`);
   } finally {
     busy = false;
     updateControls();
