@@ -68,6 +68,7 @@ def evaluate_predictions(labels, probabilities, threshold=0.5):
 
 
 def main():
+    from training.dataset_provenance import read_dataset_sidecar
     from training.preprocess import validate_dataset
 
     source_path = os.getenv("EVAL_DATA_CSV")
@@ -76,6 +77,7 @@ def main():
     source = Path(source_path)
     source_bytes = source.read_bytes()
     dataset_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    sidecar = read_dataset_sidecar(source, source_bytes)
     X_test, y_test = validate_dataset(pd.read_csv(io.BytesIO(source_bytes), float_precision="round_trip"))
     directory = Path(os.getenv("MODEL_DIR", PROJECT_ROOT / "models"))
     provenance = {**check_training_source(directory, dataset_sha256),
@@ -101,8 +103,7 @@ def main():
         raise ValueError("Model evaluation probabilities must be normalized values between 0 and 1")
     probabilities = all_probabilities[:, classes.index(1)]
     metrics = evaluate_predictions(y_test, probabilities, float(os.getenv("DECISION_THRESHOLD", "0.5")))
-    sidecar = source.with_suffix(".metadata.json")
-    data_kind = json.loads(sidecar.read_text()).get("data_kind") if sidecar.exists() else None
+    data_kind = sidecar.get("data_kind")
     metrics.update({"data_kind": data_kind or os.getenv("EVAL_DATA_KIND", "unspecified"),
                     "dataset_sha256": dataset_sha256, **provenance,
                     "evaluation_scope": "provided evaluation CSV; independence not verified"})
