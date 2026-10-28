@@ -99,7 +99,7 @@ def test_error_cache_policy_uses_active_mode_when_environment_changes(app_with_f
     assert response.headers.get("cache-control") == ("no-store" if initial_mode == "basic" else None)
 
 
-def test_off_mode_keeps_existing_generic_error_response(app_with_failure, monkeypatch):
+def test_off_mode_keeps_generic_error_and_request_correlation(app_with_failure, monkeypatch):
     app, observed = app_with_failure
     monkeypatch.setenv("DEMO_AUTH_MODE", "off")
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -108,7 +108,7 @@ def test_off_mode_keeps_existing_generic_error_response(app_with_failure, monkey
     assert response.status_code == 500
     assert response.text == "Internal Server Error"
     assert "cache-control" not in response.headers
-    assert "x-correlation-id" not in response.headers
+    assert response.headers["x-correlation-id"] == observed[0]
 
 
 def test_application_state_contains_only_the_effective_mode(app_with_failure, monkeypatch):

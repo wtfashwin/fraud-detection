@@ -20,6 +20,7 @@ from api.inference import load_bundle, InvalidFeatures
 from api.drift import DriftMonitor, DriftCollector
 from api.queue import celery_app, check_broker
 from api.demo_auth import DemoAccessGateMiddleware
+from api.middleware import PredictionBodyLimitMiddleware
 from db.db import engine
 from db.models import Explanation
 
@@ -43,7 +44,9 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Fraud Detection API", version="1.1.0", lifespan=lifespan)
-# Register before correlation so denied requests retain their request ID.
+# Starlette runs the most recently registered middleware first. Authenticate
+# before reading prediction bodies, and keep correlation outside both gates.
+app.add_middleware(PredictionBodyLimitMiddleware)
 app.add_middleware(DemoAccessGateMiddleware, app_state=app.state)
 
 
@@ -90,16 +93,12 @@ async def invalid_request(request, exc):
 
 @app.exception_handler(Exception)
 async def unexpected_error(request: Request, exc: Exception):
-    # ServerErrorMiddleware is outside the gate, so its response needs the policy here.
-    headers = {}
+    # ServerErrorMiddleware is outside the gate and correlation return path.
+    correlation = getattr(request.state, "correlation_id", None) or str(uuid.uuid4())
+    headers = {"X-Correlation-ID": correlation}
     if getattr(app.state, "demo_auth_mode", None) != "off":
         headers["Cache-Control"] = "no-store"
-        headers["X-Correlation-ID"] = getattr(request.state, "correlation_id", None) or str(uuid.uuid4())
     return PlainTextResponse("Internal Server Error", status_code=500, headers=headers)
-    # Starlette's outer server-error response bypasses the middleware return path.
-    correlation = getattr(request.state, "correlation_id", None) or str(uuid.uuid4())
-    return PlainTextResponse("Internal Server Error", status_code=500,
-                             headers={"X-Correlation-ID": correlation})
 
 
 def get_drift_monitor():

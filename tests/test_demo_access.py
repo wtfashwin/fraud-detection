@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import importlib
+import uuid
 from types import SimpleNamespace
 
 import httpx
@@ -139,6 +140,74 @@ def test_unauthorized_stream_is_not_consumed(protected_app):
     assert protected_app.statements == []
     assert protected_app.scored == []
     assert protected_app.dispatched == []
+
+
+def test_unauthorized_declared_oversized_body_is_denied_without_reading(protected_app):
+    reads = []
+
+    async def exercise():
+        async def stream():
+            reads.append(True)
+            yield b"{" * 70000
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=protected_app.module.app),
+                                     base_url="http://test") as client:
+            return await client.post("/predict", headers={"Content-Length": "65537"}, content=stream())
+
+    response = asyncio.run(exercise())
+    assert response.status_code == 401
+    assert response.headers.get_list("cache-control") == ["no-store"]
+    uuid.UUID(response.headers["x-correlation-id"])
+    assert reads == []
+    assert protected_app.statements == []
+    assert protected_app.scored == []
+    assert protected_app.dispatched == []
+
+
+def test_authorized_oversized_body_is_rejected_before_side_effects(protected_app):
+    prefix = b'{"transaction_id":"synthetic-bounded","features":[1,-1,2]}'
+    body = prefix + b" " * (65537 - len(prefix))
+    response = protected_app.client.post("/predict", content=body,
+        headers={"Authorization": AUTH, "Content-Type": "application/json"})
+    assert response.status_code == 413
+    assert response.headers.get_list("cache-control") == ["no-store"]
+    uuid.UUID(response.headers["x-correlation-id"])
+    assert protected_app.statements == []
+    assert protected_app.scored == []
+    assert protected_app.dispatched == []
+
+
+@pytest.mark.parametrize("content_length", [None, "1"])
+@pytest.mark.parametrize("root_path", ["", "/api"])
+def test_authenticated_oversized_stream_stops_before_side_effects(protected_app, content_length, root_path):
+    reads = []
+    prefix = b'{"transaction_id":"synthetic-stream","features":[1,-1,2]}'
+
+    async def exercise():
+        async def stream():
+            chunks = [prefix + b" " * (65536 - len(prefix)), b" ", b" "]
+            for index, chunk in enumerate(chunks):
+                reads.append(index)
+                yield chunk
+
+        headers = {"Authorization": AUTH, "Content-Type": "application/json"}
+        if content_length is not None:
+            headers["Content-Length"] = content_length
+        async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=protected_app.module.app, root_path=root_path),
+                base_url="http://test") as client:
+            return await client.post(root_path + "/predict", headers=headers, content=stream())
+
+    submitted_before = protected_app.module.predictions_submitted._value.get()
+    response = asyncio.run(exercise())
+    assert response.status_code == 413
+    assert response.headers.get_list("cache-control") == ["no-store"]
+    uuid.UUID(response.headers["x-correlation-id"])
+    assert reads == [0, 1]
+    assert protected_app.statements == []
+    assert protected_app.scored == []
+    assert protected_app.dispatched == []
+    assert protected_app.module.predictions_submitted._value.get() == submitted_before
 
 
 def test_application_root_path_does_not_bypass_gate(protected_app):
