@@ -3,9 +3,11 @@ import { normalizeApiBase, validateFeatures, validateModelInfo, validatePredicti
 const element = (id) => document.getElementById(id);
 let modelInfo = null;
 let apiBase = '';
+let apiBaseValid = false;
 let prediction = null;
 let requestContext = null;
 let busy = false;
+let manualRevision = 0;
 const validTransactionId = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
 const transactionErrorStates = new Set(['PENDING', 'PROCESSING', 'QUEUED', 'COMPLETED', 'FAILED', 'DISPATCH_UNCONFIRMED']);
 
@@ -35,6 +37,25 @@ function hasUnverifiedTransactionError(error, expectedId) {
   return (hasId || hasTransactionStatus) && detail.transaction_id !== expectedId;
 }
 
+function validateExplanation(explanation, expectedId) {
+  if (explanation?.transaction_id !== expectedId) {
+    throw new Error('The API returned an explanation with a missing or different transaction ID.');
+  }
+  if (!['PENDING', 'COMPLETED', 'FAILED'].includes(explanation.status)) {
+    throw new Error('The API returned an unrecognized explanation status. No result is displayed.');
+  }
+}
+
+function explanationError(error, expectedId) {
+  if (hasUnverifiedTransactionError(error, expectedId)) {
+    return 'The API returned an error with a missing or different transaction ID.';
+  }
+  if (error.status === 404 && error.detail === 'SHAP explanation not found') {
+    return 'No saved explanation was found. This does not establish whether the request was processed.';
+  }
+  return error.message;
+}
+
 function setMessage(id, message) {
   const node = element(id);
   node.textContent = message;
@@ -48,6 +69,8 @@ function updateControls() {
   element('sample-button').disabled = busy || !modelInfo;
   element('features').disabled = busy;
   element('transaction-id').disabled = busy;
+  element('manual-transaction-id').disabled = busy;
+  element('manual-explanation-button').disabled = busy || !apiBaseValid || !validTransactionId(element('manual-transaction-id').value.trim());
   element('explanation-button').disabled = busy || !requestContext;
   element('explanation-panel').hidden = !requestContext;
   element('result-panel').setAttribute('aria-busy', String(busy));
@@ -68,11 +91,20 @@ function clearResult() {
   updateControls();
 }
 
+function clearManualResult() {
+  manualRevision += 1;
+  element('manual-explanation-response').hidden = true;
+  element('manual-explanation-response').textContent = '';
+  setMessage('manual-explanation-message', '');
+}
+
 async function connect(event) {
   event?.preventDefault();
   if (busy) return;
   modelInfo = null;
+  apiBaseValid = false;
   clearResult();
+  clearManualResult();
   busy = true;
   updateControls();
   setMessage('connection-error', '');
@@ -83,6 +115,7 @@ async function connect(event) {
   element('feature-count').textContent = '';
   try {
     apiBase = normalizeApiBase(element('api-base').value);
+    apiBaseValid = true;
     modelInfo = validateModelInfo(await fetchJson(`${apiBase}/model-info`));
     element('docs-link').href = `${apiBase}/docs`;
     element('feature-count').textContent = `(${modelInfo.feature_count} values)`;
@@ -108,11 +141,18 @@ async function connect(event) {
 element('connection-form').addEventListener('submit', connect);
 element('api-base').addEventListener('input', () => {
   modelInfo = null;
+  apiBaseValid = false;
   clearResult();
+  clearManualResult();
   element('connection-status').textContent = 'URL changed. Reconnect to load this model.';
   element('connection-status').dataset.state = 'loading';
   element('feature-order').replaceChildren();
   element('feature-count').textContent = '';
+});
+
+element('manual-transaction-id').addEventListener('input', () => {
+  clearManualResult();
+  updateControls();
 });
 
 element('sample-button').addEventListener('click', () => {
@@ -223,9 +263,7 @@ element('explanation-button').addEventListener('click', async () => {
   element('explanation-response').hidden = true;
   try {
     const explanation = await fetchJson(`${lookup.apiBase}/explain/${encodeURIComponent(lookup.transactionId)}`);
-    if (explanation?.transaction_id !== lookup.transactionId) {
-      throw new Error('The API returned an explanation with a missing or different transaction ID.');
-    }
+    validateExplanation(explanation, lookup.transactionId);
     if (explanation.status === 'PENDING') {
       setMessage('explanation-message', 'The API reports this explanation is pending. Check again later.');
     } else {
@@ -234,10 +272,38 @@ element('explanation-button').addEventListener('click', async () => {
       setMessage('explanation-message', explanation.status === 'FAILED' ? 'The API reports explanation processing failed.' : 'Saved response received from the API. Method and units are included when supplied.');
     }
   } catch (error) {
-    const message = hasUnverifiedTransactionError(error, lookup.transactionId)
-      ? 'The API returned an error with a missing or different transaction ID.'
-      : error.status === 404 ? 'No saved explanation was found. It may still be pending; check again later.' : error.message;
-    setMessage('explanation-message', message);
+    setMessage('explanation-message', explanationError(error, lookup.transactionId));
+  } finally {
+    busy = false;
+    updateControls();
+  }
+});
+
+element('manual-explanation-button').addEventListener('click', async () => {
+  const id = element('manual-transaction-id').value.trim();
+  if (busy || !apiBaseValid || !validTransactionId(id)) return;
+  const lookupBase = apiBase;
+  const selectedApi = lookupBase || 'this server';
+  const showMessage = (message) => setMessage('manual-explanation-message', `${message} Selected API: ${selectedApi}.`);
+  clearManualResult();
+  const revision = manualRevision;
+  busy = true;
+  updateControls();
+  showMessage(`Checking for a saved explanation for ${id}…`);
+  try {
+    const explanation = await fetchJson(`${lookupBase}/explain/${encodeURIComponent(id)}`);
+    if (revision !== manualRevision) return;
+    validateExplanation(explanation, id);
+    if (explanation.status === 'PENDING') {
+      showMessage(`The API reports the explanation for ${id} is pending. Check again later.`);
+    } else {
+      element('manual-explanation-response').textContent = JSON.stringify(explanation, null, 2);
+      element('manual-explanation-response').hidden = false;
+      showMessage(explanation.status === 'FAILED' ? `The API reports explanation processing failed for ${id}.` : `Saved response received for ${id}. Method and units are included when supplied.`);
+    }
+  } catch (error) {
+    if (revision !== manualRevision) return;
+    showMessage(explanationError(error, id));
   } finally {
     busy = false;
     updateControls();

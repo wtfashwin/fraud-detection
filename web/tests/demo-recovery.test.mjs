@@ -344,8 +344,8 @@ if (typeof vm.SourceTextModule !== 'function') {
       { status: 503, data: { detail: { message: 'Explanation storage is unavailable' } }, expected: /Explanation storage is unavailable/ },
       { status: 503, data: { detail: { status: 'UNAVAILABLE', message: 'Explanation storage is unavailable' } }, expected: /Explanation storage is unavailable/ },
       { status: 404, data: { detail: 'SHAP explanation not found' }, expected: /No saved explanation/ },
-      { status: 404, data: { detail: { message: 'SHAP explanation not found' } }, expected: /No saved explanation/ },
-      { status: 404, data: { detail: { transaction_id: 'wanted-id', status: 'FAILED' } }, expected: /No saved explanation/ },
+      { status: 404, data: { detail: { message: 'SHAP explanation not found' } }, expected: /SHAP explanation not found/ },
+      { status: 404, data: { detail: { transaction_id: 'wanted-id', status: 'FAILED' } }, expected: /FAILED/ },
     ]) {
       const demo = await createDemo({ predictions: [ambiguous], explanations: [fixture] });
       await demo.submit('wanted-id');
@@ -371,6 +371,32 @@ if (typeof vm.SourceTextModule !== 'function') {
       assert.equal(demo.node('explanation-response').hidden, true);
       assert.equal(demo.visible('explanation-button'), true);
     }
+  });
+
+  test('original lookup preserves actionable generic and matching structured 404 details', async () => {
+    for (const detail of [
+      'Endpoint not found. Check API base URL.',
+      'Account not found. Contact administrator.',
+      { transaction_id: 'wanted-id', status: 'FAILED', message: 'Synthetic processing failure' },
+    ]) {
+      const demo = await createDemo({ predictions: [ambiguous], explanations: [{ status: 404, data: { detail } }] });
+      await demo.submit('wanted-id');
+      await demo.lookup();
+      const expected = typeof detail === 'string' ? detail : detail.message;
+      assert.ok(demo.node('explanation-message').textContent.includes(expected));
+      assert.equal(demo.node('explanation-response').hidden, true);
+    }
+  });
+
+  test('original lookup does not present an unrecognized status as a saved explanation', async () => {
+    const demo = await createDemo({ predictions: [ambiguous], explanations: [{ data: {
+      transaction_id: 'wanted-id', status: 'UNKNOWN', value: 99,
+    } }] });
+    await demo.submit('wanted-id');
+    await demo.lookup();
+    assert.equal(demo.node('explanation-response').hidden, true);
+    assert.match(demo.node('explanation-message').textContent, /unrecognized.*status/i);
+    assert.doesNotMatch(demo.node('explanation-message').textContent, /saved response received/i);
   });
 
   test('invalid input clears recovery and never submits or queries', async () => {

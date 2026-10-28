@@ -18,7 +18,7 @@ class Element {
   focus() { this.focused = true; }
 }
 
-export async function createDemo({ apiBase = '', uuid = true, cryptoSource, predictions = [], explanations = [] } = {}) {
+export async function createDemo({ apiBase = '', uuid = true, cryptoSource, predictions = [], explanations = [], modelInfoStatus = 200 } = {}) {
   const markup = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const nodes = new Map(), stack = [];
   const voidTags = new Set(['meta', 'link', 'input', 'br', 'img', 'source', 'track', 'wbr', 'hr', 'area', 'base', 'embed', 'param', 'col']);
@@ -31,6 +31,7 @@ export async function createDemo({ apiBase = '', uuid = true, cryptoSource, pred
       const id = /\bid="([^"]+)"/.exec(match[0])?.[1];
       if (id) {
         const node = new Element(id, /\shidden(?:\s|>)/.test(match[0]));
+        node.disabled = /\sdisabled(?:\s|>)/.test(match[0]);
         node.parents = stack.map((parent) => parent.id).filter(Boolean);
         nodes.set(id, node);
       }
@@ -50,6 +51,7 @@ export async function createDemo({ apiBase = '', uuid = true, cryptoSource, pred
     const request = { url, method: options.method || 'GET', payload: options.body ? JSON.parse(options.body) : null };
     requests.push(request);
     if (request.method === 'GET' && url.endsWith('/model-info')) {
+      if (modelInfoStatus !== 200) return response(modelInfoStatus, { detail: 'Model metadata unavailable' });
       return response(200, { feature_names: ['Time', 'V1', 'Amount'], feature_count: 3, model_source: 'fixed fixture' });
     }
     if (request.method === 'POST' && url.endsWith('/predict')) {
@@ -77,7 +79,7 @@ export async function createDemo({ apiBase = '', uuid = true, cryptoSource, pred
   await app.evaluate();
   const flush = async () => { for (let turn = 0; turn < 20; turn++) await Promise.resolve(); };
   await flush();
-  assert.equal(node('connection-status').dataset.state, 'ready');
+  assert.equal(node('connection-status').dataset.state, modelInfoStatus === 200 ? 'ready' : 'failed');
   const fire = (id, event) => node(id).listeners.get(event)?.({ preventDefault() {} });
   return { node, requests, flush,
     visible(id) { return !node(id).hidden && node(id).parents.every((parent) => !node(parent).hidden); },
@@ -87,6 +89,7 @@ export async function createDemo({ apiBase = '', uuid = true, cryptoSource, pred
     },
     submitCurrent: () => fire('transaction', 'submit'),
     lookup: () => fire('explanation-button', 'click'),
+    manualLookup: () => fire('manual-explanation-button', 'click'),
     reconnect: () => fire('connection-form', 'submit'),
     expireTimeouts() { for (const callback of [...timers.values()]) callback(); },
     posts: () => requests.filter((request) => request.method === 'POST'),

@@ -14,6 +14,8 @@ When a valid submitted ID is known, **Check explanation** remains available afte
 
 The application does not initiate a second prediction automatically. A browser or network may still make repeated HTTP attempts after a connection failure. The database's unique explanation ID can reject a later duplicate insert, but scoring occurs before that check, so the same ID does not guarantee exactly one inference or one server arrival.
 
+A separate manual lookup accepts a known ID after a reload or when model metadata is unavailable. It queries the selected API only after the lookup button is pressed and the URL passes syntax validation. This does not establish that the API is reachable or trusted. The selected API may redirect to a different server. Changing the manual ID or API clears the previous manual result. This lookup is separate from the submitted request's original recovery context. Both lookups reject unrecognized explanation statuses and preserve useful HTTP error details. Only the built in "SHAP explanation not found" 404 is described as a missing explanation.
+
 The optional API URL supports a separate HTTP(S) API, but browser cross-origin access must be allowed by that server. Same-origin `/demo/` is the recommended setup. No API URL or transaction is saved in browser storage.
 
 ## Checks
