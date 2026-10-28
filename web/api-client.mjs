@@ -52,6 +52,8 @@ function errorDetail(detail) {
   return detail ? JSON.stringify(detail) : 'The API did not provide an error description.';
 }
 
+export class RequestTimeoutError extends Error {}
+
 export async function fetchJson(url, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
@@ -66,11 +68,12 @@ export async function fetchJson(url, options = {}) {
     if (!response.ok) {
       const error = new Error(`HTTP ${response.status}: ${errorDetail(data.detail)}`);
       error.status = response.status;
+      error.detail = data.detail;
       throw error;
     }
     return data;
   } catch (error) {
-    if (controller.signal.aborted) throw new Error('The API did not respond within 15 seconds. A submitted request may still have been processed; check its transaction ID before retrying.');
+    if (controller.signal.aborted) throw new RequestTimeoutError('The API did not respond within 15 seconds. A submitted request may still have been processed; check its transaction ID before retrying.');
     if (error instanceof TypeError) throw new Error('Cannot reach the API. Check the URL, server, and browser access settings, then reconnect.');
     throw error;
   } finally { clearTimeout(timer); }

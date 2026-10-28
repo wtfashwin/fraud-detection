@@ -55,6 +55,9 @@ test('HTTP client sends the supplied values and surfaces failed dependencies', a
     if (request.url === '/failed') {
       response.writeHead(503);
       response.end(JSON.stringify({ detail: 'Explanation queue unavailable' }));
+    } else if (request.url === '/structured-failed') {
+      response.writeHead(503);
+      response.end(JSON.stringify({ detail: { transaction_id: 'known-id', status: 'FAILED', message: 'Explanation failed' } }));
     } else {
       response.end(JSON.stringify({ echoed: received }));
     }
@@ -65,4 +68,10 @@ test('HTTP client sends the supplied values and surfaces failed dependencies', a
   const payload = { features: [0, -1, 100] };
   assert.deepEqual(await fetchJson(`${base}/predict`, { method: 'POST', body: JSON.stringify(payload) }), { echoed: payload });
   await assert.rejects(fetchJson(`${base}/failed`), { message: 'HTTP 503: Explanation queue unavailable', status: 503 });
+  await assert.rejects(fetchJson(`${base}/structured-failed`), (error) => {
+    assert.equal(error.status, 503);
+    assert.equal(error.message, 'HTTP 503: {"transaction_id":"known-id","status":"FAILED","message":"Explanation failed"}');
+    assert.deepEqual(error.detail, { transaction_id: 'known-id', status: 'FAILED', message: 'Explanation failed' });
+    return true;
+  });
 });
