@@ -17,7 +17,7 @@ from xgboost import XGBClassifier, __version__ as xgboost_version, config_contex
 
 from training import PROJECT_ROOT
 from training.preprocess import FEATURE_NAMES, make_smote, validate_dataset
-from training.provenance import save_training_rows, training_row_manifest
+from training.provenance import row_fingerprints, save_training_rows, training_row_manifest
 
 
 def fit_training_fold(features, labels, random_state=42, n_estimators=100,
@@ -68,8 +68,13 @@ def fit_and_evaluate_partition(X_train, X_test, y_train, y_test, n_splits=5,
     pipeline = fit_training_fold(X_train, y_train, random_state, n_estimators,
                                  model_params, feature_engineering)
     metrics = evaluate_predictions(y_test, pipeline.predict_proba(X_test)[:, 1], threshold)
+    training_rows = training_row_manifest(X_train)
+    fitted_fingerprints = set(training_rows["fingerprints"])
+    holdout_overlap = sum(value in fitted_fingerprints for value in row_fingerprints(X_test))
     metrics.update({
         **source_info, "train_rows": len(y_train), "test_rows": len(y_test), "random_state": random_state,
+        "holdout_feature_overlap_rows": holdout_overlap,
+        "holdout_feature_overlap_scope": "Exact raw feature vectors shared with fitted training rows; labels excluded",
         "cv_folds": n_splits, "cv_roc_auc_mean": float(np.mean([m["roc_auc"] for m in cv_metrics])),
         "cv_roc_auc_std": float(np.std([m["roc_auc"] for m in cv_metrics])),
         "cv_average_precision_mean": float(np.mean([m["average_precision"] for m in cv_metrics])),
@@ -86,7 +91,7 @@ def fit_and_evaluate_partition(X_train, X_test, y_train, y_test, n_splits=5,
     })
     return {"pipeline": pipeline, "metrics": metrics, "features": FEATURE_NAMES.copy(),
             "input_example": X_test.iloc[:5].copy(), "drift_baseline": baseline,
-            "training_indices": X_train.index.tolist(), "training_rows": training_row_manifest(X_train)}
+            "training_indices": X_train.index.tolist(), "training_rows": training_rows}
 
 
 def train_and_evaluate(frame, n_splits=5, random_state=42, n_estimators=100, threshold=0.5,
