@@ -65,11 +65,19 @@ class InferenceBundle:
 
     def score(self, features):
         data = self.prepare(features)
+        classes = np.asarray(getattr(self.model, "classes_", []))
+        if (classes.ndim != 1 or classes.size not in (1, 2)
+                or (classes.size == 1 and classes[0] != 1)
+                or (classes.size == 2 and not (
+                    np.count_nonzero(classes == 0) == 1 and np.count_nonzero(classes == 1) == 1
+                ))):
+            raise ValueError("Model classes must be fraud class 1 alone or binary classes 0 and 1")
         labels = np.asarray(self.model.predict(data)).reshape(-1)
         if labels.shape != (1,) or labels[0] not in (0, 1):
             raise ValueError("Model must return one binary prediction")
+        if labels[0] not in classes:
+            raise ValueError("Model prediction must match a model class")
         probabilities = np.asarray(self.model.predict_proba(data), dtype=float)
-        classes = np.asarray(getattr(self.model, "classes_", []))
         fraud_columns = np.flatnonzero(classes == 1)
         if probabilities.shape != (1, len(classes)) or len(fraud_columns) != 1:
             raise ValueError("Model probability output must include fraud class 1")
