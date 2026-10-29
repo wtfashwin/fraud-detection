@@ -3,7 +3,7 @@ export function normalizeApiBase(value) {
   if (!trimmed) return '';
   let url;
   try { url = new URL(trimmed); } catch { throw new Error('Enter a full HTTP or HTTPS API URL, or leave it blank for this server.'); }
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href.includes('?') || url.href.includes('#')) {
     throw new Error('Use an HTTP or HTTPS URL without credentials, a query, or a fragment.');
   }
   return url.href.replace(/\/+$/, '');
@@ -47,9 +47,18 @@ export function formatProbability(score) {
 }
 
 function errorDetail(detail) {
-  if (typeof detail === 'string') return detail;
-  if (Array.isArray(detail)) return detail.map((item) => `${item.loc?.join('.') || 'Input'}: ${item.msg || 'Invalid value'}`).join('; ');
-  return detail ? JSON.stringify(detail) : 'The API did not provide an error description.';
+  const missing = 'The API did not provide an error description.';
+  if (typeof detail === 'string') return detail.trim() ? detail : missing;
+  if (Array.isArray(detail)) {
+    if (!detail.length) return missing;
+    return detail.map((item) => {
+      const location = Array.isArray(item?.loc) && item.loc.every((part) => ['string', 'number'].includes(typeof part))
+        ? item.loc.join('.') : '';
+      const message = typeof item?.msg === 'string' && item.msg.trim() ? item.msg : 'Invalid value';
+      return `${location || 'Input'}: ${message}`;
+    }).join('; ');
+  }
+  return detail ? JSON.stringify(detail) : missing;
 }
 
 export class RequestTimeoutError extends Error {}
@@ -64,8 +73,13 @@ export async function fetchJson(url, options = {}) {
       signal: controller.signal,
     });
     let data;
-    try { data = await response.json(); } catch { throw new Error(`HTTP ${response.status}: The API returned a non-JSON response.`); }
+    try { data = await response.json(); } catch {
+      const error = new Error(`HTTP ${response.status}: The API returned a non-JSON response.`);
+      if (!response.ok) error.status = response.status;
+      throw error;
+    }
     if (!response.ok) {
+      data ??= {};
       const error = new Error(`HTTP ${response.status}: ${errorDetail(data.detail)}`);
       error.status = response.status;
       error.detail = data.detail;

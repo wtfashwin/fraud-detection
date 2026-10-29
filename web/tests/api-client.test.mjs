@@ -75,3 +75,86 @@ test('HTTP client sends the supplied values and surfaces failed dependencies', a
     return true;
   });
 });
+
+for (const [name, status, body, detail] of [
+  ['null body', 503, null, 'The API did not provide an error description.'],
+  ['empty detail array', 422, { detail: [] }, 'The API did not provide an error description.'],
+  ['empty detail string', 422, { detail: '' }, 'The API did not provide an error description.'],
+  ['whitespace-only detail string', 422, { detail: '  \t\n' }, 'The API did not provide an error description.'],
+  ['nonblank detail string', 503, { detail: '  Service unavailable  ' }, '  Service unavailable  '],
+  ['null detail entry', 422, { detail: [null] }, 'Input: Invalid value'],
+  ['non-array location', 422, { detail: [{ loc: 'body', msg: 'Invalid input' }] }, 'Input: Invalid input'],
+  ['non-primitive location item', 422, { detail: [{ loc: ['body', { toString: 'invalid' }], msg: 'Invalid input' }] }, 'Input: Invalid input'],
+  ['non-string message', 422, { detail: [{ loc: ['body'], msg: { toString: 'invalid' } }] }, 'body: Invalid value'],
+  ['whitespace-only item message', 422, { detail: [{ loc: ['body'], msg: '  \t\n' }] }, 'body: Invalid value'],
+  ['nonblank item message', 422, { detail: [{ loc: ['body'], msg: '  Invalid input  ' }] }, 'body:   Invalid input  '],
+]) {
+  test(`HTTP client preserves status for ${name}`, async (context) => {
+    const server = createServer((_request, response) => {
+      response.writeHead(status, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(body));
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    context.after(() => new Promise((resolve) => server.close(resolve)));
+    const url = `http://127.0.0.1:${server.address().port}/error`;
+    await assert.rejects(fetchJson(url), (error) => {
+      assert.equal(error.status, status);
+      assert.equal(error.message, `HTTP ${status}: ${detail}`);
+      assert.doesNotMatch(error.message, /Cannot reach the API/);
+      return true;
+    });
+  });
+}
+
+test('HTTP client preserves ordinary validation details', async (context) => {
+  const server = createServer((_request, response) => {
+    response.writeHead(422, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ detail: [{ loc: ['body', 'features', 0], msg: 'Invalid input' }] }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const url = `http://127.0.0.1:${server.address().port}/error`;
+  await assert.rejects(fetchJson(url), { status: 422, message: 'HTTP 422: body.features.0: Invalid input' });
+});
+
+test('HTTP client preserves a successful null JSON response', async (context) => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end('null');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const url = `http://127.0.0.1:${server.address().port}/result`;
+  assert.equal(await fetchJson(url), null);
+});
+
+for (const status of [409, 404]) {
+  test(`HTTP client preserves HTTP ${status} for a non-JSON error body`, async (context) => {
+    const server = createServer((_request, response) => {
+      response.writeHead(status, { 'Content-Type': 'text/plain' });
+      response.end('not JSON');
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    context.after(() => new Promise((resolve) => server.close(resolve)));
+    const url = `http://127.0.0.1:${server.address().port}/error`;
+    await assert.rejects(fetchJson(url), {
+      status,
+      message: `HTTP ${status}: The API returned a non-JSON response.`,
+    });
+  });
+}
+
+test('HTTP client still rejects a successful non-JSON body', async (context) => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/plain' });
+    response.end('not JSON');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const url = `http://127.0.0.1:${server.address().port}/result`;
+  await assert.rejects(fetchJson(url), (error) => {
+    assert.equal(error.status, undefined);
+    assert.equal(error.message, 'HTTP 200: The API returned a non-JSON response.');
+    return true;
+  });
+});
