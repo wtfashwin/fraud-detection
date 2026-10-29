@@ -122,13 +122,14 @@ class DriftMonitor:
         try:
             # Limit the response at Redis, including when an older window is larger.
             observations = self._client().lrange(self.key, -self.max_samples, -1)
-            values = np.asarray([json.loads(row) for row in observations], dtype=float)
             report["samples"] = len(observations)
+            values = np.asarray([json.loads(row) for row in observations], dtype=float)
+            if observations and (values.shape != (len(observations), len(self.baseline["feature_names"]))
+                                 or not np.isfinite(values).all()):
+                raise ValueError("Stored live observations are invalid")
             if len(observations) < self.min_samples:
                 report["status"] = "WARMING_UP"
                 return report
-            if values.shape != (len(observations), len(self.baseline["feature_names"])) or not np.isfinite(values).all():
-                raise ValueError("Stored live observations are invalid")
             from scipy.stats import ks_2samp
             reference = np.asarray(self.baseline["reference_samples"], dtype=float)
             for index, name in enumerate(self.baseline["feature_names"]):
