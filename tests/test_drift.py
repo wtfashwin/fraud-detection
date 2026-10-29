@@ -93,6 +93,41 @@ def test_two_monitors_share_bounded_window_instead_of_process_local_state():
     assert "auc" not in drift
 
 
+def test_existing_large_redis_list_reads_only_the_latest_window():
+    from api.drift import DriftMonitor
+
+    class TransferLimitedRedis(MemoryRedis):
+        def lrange(self, key, start, stop):
+            rows = super().lrange(key, start, stop)
+            if len(rows) > 20:
+                raise RuntimeError("Synthetic Redis transfer budget exceeded")
+            return rows
+
+    client = TransferLimitedRedis()
+    monitor = DriftMonitor(baseline(), client=client, max_samples=20, min_samples=20)
+    # Old corrupt entries must not be fetched or affect the latest valid window.
+    client.shared[monitor.key] = (
+        ["not-json"] * 1000
+        + [json.dumps([i, i * 2]) for i in range(20)]
+    )
+
+    report = monitor.report()
+    assert report["status"] == "OK"
+    assert report["samples"] == 20
+    assert report["features"]["V1"]["statistic"] == 0.0
+
+
+def test_invalid_entry_in_latest_window_reports_error():
+    from api.drift import DriftMonitor
+
+    client = MemoryRedis()
+    monitor = DriftMonitor(baseline(), client=client, max_samples=20, min_samples=20)
+    client.shared[monitor.key] = [json.dumps([i, i * 2]) for i in range(19)] + ["not-json"]
+    report = monitor.report()
+    assert report["status"] == "ERROR"
+    assert report["features"] == {}
+
+
 def test_insufficient_samples_are_warming_up():
     from api.drift import DriftMonitor
     monitor = DriftMonitor(baseline(), client=MemoryRedis(), min_samples=20)
@@ -103,6 +138,48 @@ def test_insufficient_samples_are_warming_up():
     assert report["features"] == {}
 
 
+@pytest.mark.parametrize("observation", [[1], [1, 2, 3], 123, [float("nan"), 0], [1, float("inf")]])
+def test_invalid_observation_is_reported_during_warmup(observation):
+    from api.drift import DriftMonitor
+
+    client = MemoryRedis()
+    monitor = DriftMonitor(baseline(), client=client, max_samples=20, min_samples=20)
+    client.shared[monitor.key] = [json.dumps(observation)]
+
+    report = monitor.report()
+
+    assert report["status"] == "ERROR"
+    assert report["samples"] == 1
+    assert report["features"] == {}
+
+
+def test_empty_valid_window_is_warming_up():
+    from api.drift import DriftMonitor
+
+    monitor = DriftMonitor(baseline(), client=MemoryRedis(), min_samples=20)
+
+    report = monitor.report()
+
+    assert report["status"] == "WARMING_UP"
+    assert report["samples"] == 0
+    assert report["features"] == {}
+
+
+@pytest.mark.parametrize("stored", ["not-json", '["not-a-number"]'])
+def test_invalid_stored_data_reports_the_returned_sample_count(stored):
+    from api.drift import DriftMonitor
+
+    client = MemoryRedis()
+    monitor = DriftMonitor(baseline(), client=client, max_samples=20, min_samples=20)
+    client.shared[monitor.key] = [stored]
+
+    report = monitor.report()
+
+    assert report["status"] == "ERROR"
+    assert report["samples"] == 1
+    assert report["features"] == {}
+
+
 def test_redis_failure_is_explicit_and_does_not_fabricate_statistics():
     from api.drift import DriftMonitor
     class Unavailable:
@@ -110,8 +187,10 @@ def test_redis_failure_is_explicit_and_does_not_fabricate_statistics():
         def pipeline(self, *args, **kwargs): raise ConnectionError("synthetic transport failure")
     monitor = DriftMonitor(baseline(), client=Unavailable())
     assert monitor.observe([1, 2]) is False
-    assert monitor.report()["status"] == "ERROR"
-    assert monitor.report()["features"] == {}
+    report = monitor.report()
+    assert report["status"] == "ERROR"
+    assert report["samples"] is None
+    assert report["features"] == {}
 
 
 def test_invalid_or_tampered_baseline_is_rejected():

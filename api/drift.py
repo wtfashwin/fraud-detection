@@ -120,16 +120,16 @@ class DriftMonitor:
             report["reason"] = "Training baseline has fewer than the required minimum samples"
             return report
         try:
-            observations = self._client().lrange(self.key, 0, -1)
-            # Redis trimming is transactional, but a config change can leave a larger old window.
-            observations = observations[-self.max_samples:]
-            values = np.asarray([json.loads(row) for row in observations], dtype=float)
+            # Limit the response at Redis, including when an older window is larger.
+            observations = self._client().lrange(self.key, -self.max_samples, -1)
             report["samples"] = len(observations)
+            values = np.asarray([json.loads(row) for row in observations], dtype=float)
+            if observations and (values.shape != (len(observations), len(self.baseline["feature_names"]))
+                                 or not np.isfinite(values).all()):
+                raise ValueError("Stored live observations are invalid")
             if len(observations) < self.min_samples:
                 report["status"] = "WARMING_UP"
                 return report
-            if values.shape != (len(observations), len(self.baseline["feature_names"])) or not np.isfinite(values).all():
-                raise ValueError("Stored live observations are invalid")
             from scipy.stats import ks_2samp
             reference = np.asarray(self.baseline["reference_samples"], dtype=float)
             for index, name in enumerate(self.baseline["feature_names"]):
