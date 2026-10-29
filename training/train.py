@@ -170,10 +170,11 @@ def log_to_mlflow(result, tracking_uri=None, experiment_name=None):
 
 
 def load_training_source(source):
+    from training.dataset_provenance import read_dataset_sidecar
+
     source = Path(source)
     source_bytes = source.read_bytes()
-    provenance = source.with_suffix(".metadata.json")
-    sidecar = json.loads(provenance.read_text()) if provenance.exists() else {}
+    sidecar = read_dataset_sidecar(source, source_bytes)
     return pd.read_csv(io.BytesIO(source_bytes), float_precision="round_trip"), {"data_kind": sidecar.get("data_kind") or sidecar.get("kind") or os.getenv("DATA_KIND", "unspecified"),
                                  "dataset_sha256": hashlib.sha256(source_bytes).hexdigest(),
                                  "dataset_path": str(source), "dataset_source": sidecar.get("source_url", sidecar.get("source", "unspecified"))}

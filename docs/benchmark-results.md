@@ -19,16 +19,18 @@ At threshold 0.5 the tuned raw model produced 88 true positives, 10 false negati
 
 ## Reproduce
 
-Install `requirements.txt`, then run:
+Install `requirements.txt`, then choose a fresh directory under the ignored `data/benchmark/` tree. The downloader refuses to replace an existing CSV or metadata sidecar, including on a repeat run. For example:
 
 ```sh
-python scripts/fetch_benchmark.py
-python -m training.tune --data data/benchmark/creditcard.csv \
+python scripts/fetch_benchmark.py --directory data/benchmark/reproduction
+python -m training.tune --data data/benchmark/reproduction/creditcard.csv \
   --output models/benchmark-optuna --trials 10 --max-majority 20000 \
   --estimators 100 --study-name benchmark-optuna-raw30-seed42 --require-target
-python -m training.tune --data data/benchmark/creditcard.csv \
+python -m training.tune --data data/benchmark/reproduction/creditcard.csv \
   --output models/benchmark-engineered --trials 1 --max-majority 20000 \
   --estimators 100 --feature-engineering --study-name benchmark-engineered
 ```
+
+The downloader buffers up to 256 MiB of source and 512 MiB of CSV in memory; parsing and conversion need additional memory. It requires `O_NOFOLLOW` and `O_NONBLOCK` to examine the source path even for a fresh download, and rejects source symlinks and nonregular files. The filesystem must honor exclusive creation with `O_CREAT|O_EXCL`. It writes metadata before CSV, and either file can be visible before writing finishes. If the command fails, inspect the files named in the error and retry in a fresh directory; do not use a partial pair. The `training.train`, `training.tune`, `training.evaluate`, `training.preprocess`, and `scripts/validate_auc.py` commands verify a declared `csv_sha256` against the local file bytes they read. Preprocessing and AUC validation retain pandas' compression inference and hash compressed file bytes before decompression. For a file URL, AUC validation checks the sidecar beside the path actually opened by urllib, and fails if that path cannot be identified. Other URLs and open streams have no automatically associated local sidecar. Snapshotting a CSV requires additional memory. Reading a present sidecar requires `O_NONBLOCK` and a regular file, though a symlink to a regular file is supported; datasets with no sidecar remain supported without that flag. The original historical `notebooks/feature_engineering.ipynb` checks a separate file read; the unexecuted `notebooks/feature_engineering_verified.ipynb` computes the hash of the bytes it parses and checks a declared sidecar hash when present for future runs. The downloader parses verified source bytes, but another process can replace paths during or after processing or modify a newly created file while it is being written. Missing sidecars and external readers are outside the check. The two output names are not published atomically.
 
 Models, five-row input examples, signatures, aggregate metrics, and the training-only raw drift reference are logged to local MLflow. Registration was disabled for these experiments. The safe aggregate results, parameters, provenance, and package versions are recorded in [benchmark-results.json](benchmark-results.json). The [EDA notebook](../notebooks/feature_engineering.ipynb) contains executed aggregate plots without raw transaction tables.
