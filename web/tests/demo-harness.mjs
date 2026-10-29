@@ -14,6 +14,7 @@ class Element {
   set textContent(value) { this._textContent = String(value ?? ''); this.children = []; }
   addEventListener(type, callback) { this.listeners.set(type, callback); }
   setAttribute(name, value) { this.attributes.set(name, value); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
   removeAttribute(name) { this.attributes.delete(name); }
   replaceChildren(...children) { this._textContent = ''; this.children = children; }
   append(...children) { this.children.push(...children); }

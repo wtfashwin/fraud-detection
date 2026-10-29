@@ -9,6 +9,7 @@ let requestContext = null;
 let busy = false;
 let manualRevision = 0;
 let scoringRevision = 0;
+const attemptedTransactionIds = new Set();
 const recoveryReceipts = [];
 const maxRecoveryReceipts = 10;
 const validTransactionId = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
@@ -218,6 +219,8 @@ async function connect(event) {
   updateControls();
   setMessage('connection-error', '');
   setMessage('input-error', '');
+  element('features').removeAttribute('aria-invalid');
+  element('transaction-id').removeAttribute('aria-invalid');
   element('connection-status').textContent = 'Connecting…';
   element('connection-status').dataset.state = 'loading';
   element('feature-order').replaceChildren();
@@ -268,13 +271,18 @@ element('sample-button').addEventListener('click', () => {
   if (!modelInfo || busy) return;
   const values = modelInfo.feature_names.map((name) => name === 'Amount' ? 100 : 0);
   element('features').value = JSON.stringify(values);
-  element('transaction-id').value = '';
+  element('features').removeAttribute('aria-invalid');
+  const transactionInput = element('transaction-id');
+  if (attemptedTransactionIds.has(transactionInput.value.trim())) {
+    transactionInput.value = '';
+    transactionInput.removeAttribute('aria-invalid');
+  }
   // The example is an arbitrary input vector; it carries no expected class or score.
   element('sample-note').textContent = modelInfo.feature_names.includes('Amount')
     ? 'Synthetic example: zeros for all features except Amount = 100. This is invented input for testing the request flow, with no expected fraud outcome.'
     : 'Synthetic example: zeros for all features. This is invented input for testing the request flow, with no expected fraud outcome.';
   element('sample-note').hidden = false;
-  setMessage('input-error', '');
+  if (transactionInput.getAttribute('aria-invalid') !== 'true') setMessage('input-error', '');
   clearResult();
   element('features').focus();
 });
@@ -282,7 +290,8 @@ element('sample-button').addEventListener('click', () => {
 for (const id of ['features', 'transaction-id']) {
   element(id).addEventListener('input', () => {
     clearResult();
-    setMessage('input-error', '');
+    const other = id === 'features' ? 'transaction-id' : 'features';
+    if (element(other).getAttribute('aria-invalid') !== 'true') setMessage('input-error', '');
     element(id).removeAttribute('aria-invalid');
     if (id === 'features') element('sample-note').hidden = true;
   });
@@ -330,6 +339,7 @@ element('transaction').addEventListener('submit', async (event) => {
   updateControls();
   setMessage('request-status', 'Scoring with the connected API…');
   try {
+    attemptedTransactionIds.add(payload.transaction_id);
     const response = validatePrediction(await fetchJson(`${submittedBase}/predict`, { method: 'POST', body: JSON.stringify(payload) }));
     if (payload.transaction_id && response.transaction_id !== payload.transaction_id) {
       throw new Error('The API returned a different transaction ID.');
