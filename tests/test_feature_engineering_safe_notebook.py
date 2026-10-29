@@ -30,9 +30,9 @@ def write_source(tmp_path, content, suffix=".csv"):
     return source
 
 
-def sidecar_for(source, content, **fields):
+def sidecar_for(path, content, **fields):
     metadata = {"csv_sha256": hashlib.sha256(content).hexdigest(), **fields}
-    source.with_suffix(".metadata.json").write_text(json.dumps(metadata))
+    path.with_suffix(".metadata.json").write_text(json.dumps(metadata))
 
 
 def load_cell(source, tmp_path, monkeypatch, *, kind=None):
@@ -101,6 +101,129 @@ def test_mismatched_sidecar_is_rejected_before_csv_parsing(tmp_path, monkeypatch
     monkeypatch.setattr(pd, "read_csv", parse_would_be_unsafe)
     with pytest.raises(ValueError, match="csv_sha256|CSV hash"):
         load_cell(source, tmp_path, monkeypatch)
+
+
+def test_symlink_input_rejects_mismatched_sidecar_beside_supplied_path(tmp_path, monkeypatch):
+    content = fixture_csv()
+    target = write_source(tmp_path, content)
+    alias = tmp_path / "alias.csv"
+    alias.symlink_to(target)
+    sidecar_for(target, content)
+    alias.with_suffix(".metadata.json").write_text(json.dumps({"csv_sha256": "0" * 64}))
+
+    with pytest.raises(ValueError, match="csv_sha256|CSV hash"):
+        load_cell(alias, tmp_path, monkeypatch)
+
+
+def test_symlink_input_rejects_target_mismatch_even_if_supplied_sidecar_matches(tmp_path, monkeypatch):
+    content = fixture_csv()
+    target = write_source(tmp_path, content)
+    alias = tmp_path / "alias.csv"
+    alias.symlink_to(target)
+    sidecar_for(target, b"different bytes", data_kind="wrong target")
+    sidecar_for(alias, content, data_kind="synthetic")
+
+    with pytest.raises(ValueError, match="csv_sha256|CSV hash"):
+        load_cell(alias, tmp_path, monkeypatch)
+
+
+def test_symlink_input_rejects_target_mismatch_when_supplied_sidecar_missing(tmp_path, monkeypatch):
+    content = fixture_csv()
+    target = write_source(tmp_path, content)
+    alias = tmp_path / "alias.csv"
+    alias.symlink_to(target)
+    sidecar_for(target, b"different bytes")
+
+    with pytest.raises(ValueError, match="csv_sha256|CSV hash"):
+        load_cell(alias, tmp_path, monkeypatch)
+
+
+def test_symlink_input_checks_both_matching_sidecars_and_prefers_supplied_fields(tmp_path, monkeypatch):
+    content = fixture_csv()
+    target = write_source(tmp_path, content)
+    alias = tmp_path / "alias.csv"
+    alias.symlink_to(target)
+    sidecar_for(target, content, data_kind="target label", source_url="target fixture")
+    sidecar_for(alias, content, data_kind="synthetic")
+
+    result = load_cell(alias, tmp_path, monkeypatch)
+
+    assert result["data_kind"] == "synthetic"
+    assert result["provenance"]["source_url"] == "target fixture"
+    assert result["dataset_sha256"] == hashlib.sha256(content).hexdigest()
+    assert result["frame"]["Time"].tolist() == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "target_fields,supplied_fields,expected",
+    [
+        ({"source_url": "target url"}, {"source": "supplied source"}, "supplied source"),
+        ({"source": "target source"}, {"source_url": "supplied url"}, "supplied url"),
+        ({"source_url": "target url"}, {"source": ""}, "target url"),
+    ],
+)
+def test_symlink_source_label_prefers_supplied_alias(tmp_path, monkeypatch, capsys, target_fields, supplied_fields, expected):
+    content = fixture_csv()
+    target = write_source(tmp_path, content)
+    alias = tmp_path / "alias.csv"
+    alias.symlink_to(target)
+    sidecar_for(target, content, **target_fields)
+    sidecar_for(alias, content, **supplied_fields)
+
+    load_cell(alias, tmp_path, monkeypatch)
+
+    assert json.loads(capsys.readouterr().out)["source_url"] == expected
+
+
+def test_symlink_input_retains_target_metadata_when_supplied_sidecar_missing(tmp_path, monkeypatch):
+    content = fixture_csv()
+    target = write_source(tmp_path, content)
+    alias = tmp_path / "alias.csv"
+    alias.symlink_to(target)
+    sidecar_for(target, content, data_kind="synthetic")
+
+    result = load_cell(alias, tmp_path, monkeypatch)
+
+    assert result["data_kind"] == "synthetic"
+    assert result["dataset_sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_symlink_input_preserves_compression_inferred_from_target(tmp_path, monkeypatch):
+    content = gzip.compress(fixture_csv(), mtime=0)
+    target = write_source(tmp_path, content, suffix=".csv.gz")
+    alias = tmp_path / "alias.csv"
+    alias.symlink_to(target)
+    sidecar_for(alias, content, data_kind="synthetic")
+
+    result = load_cell(alias, tmp_path, monkeypatch)
+
+    assert result["data_kind"] == "synthetic"
+    assert result["dataset_sha256"] == hashlib.sha256(content).hexdigest()
+    assert result["frame"]["Time"].tolist() == [1, 2]
+
+
+def test_replacing_symlink_after_resolution_keeps_original_input(tmp_path, monkeypatch):
+    original = fixture_csv(first_time=1)
+    target = write_source(tmp_path, original)
+    replacement = tmp_path / "replacement.csv"
+    replacement.write_bytes(fixture_csv(first_time=101))
+    alias = tmp_path / "alias.csv"
+    alias.symlink_to(target)
+    sidecar_for(alias, original)
+    real_resolve = Path.resolve
+
+    def replace_after_resolution(path, *args, **kwargs):
+        resolved = real_resolve(path, *args, **kwargs)
+        if path == alias:
+            alias.unlink()
+            alias.symlink_to(replacement)
+        return resolved
+
+    monkeypatch.setattr(Path, "resolve", replace_after_resolution)
+    result = load_cell(alias, tmp_path, monkeypatch)
+
+    assert result["frame"]["Time"].tolist() == [1, 2]
+    assert result["dataset_sha256"] == hashlib.sha256(original).hexdigest()
 
 
 def test_replacement_after_parse_keeps_frame_and_hash_on_same_snapshot(tmp_path, monkeypatch):
